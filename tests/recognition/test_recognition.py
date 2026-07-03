@@ -43,6 +43,24 @@ def test_recognition_no_face(mock_face_detection_class: MagicMock) -> None:
 
 
 @patch("visionauth.recognition.recognition.mp_face_detection.FaceDetection")
+def test_recognition_process_returns_none(mock_face_detection_class: MagicMock) -> None:
+    """Tests when MediaPipe process() returns None."""
+    mock_instance = MagicMock()
+    mock_instance.process.return_value = None
+    mock_face_detection_class.return_value = mock_instance
+
+    event_bus = MagicMock(spec=EventBus)
+    recognition = Recognition(event_bus, confidence_threshold=0.6)
+
+    dummy_frame = np.ones((480, 640, 3), dtype=np.uint8)
+    results = recognition.process_frame(dummy_frame)
+
+    assert results == []
+    event_bus.emit.assert_not_called()
+    mock_instance.process.assert_called_once()
+
+
+@patch("visionauth.recognition.recognition.mp_face_detection.FaceDetection")
 def test_recognition_one_face(mock_face_detection_class: MagicMock) -> None:
     """Tests when exactly one face is detected above the confidence threshold."""
     mock_instance = MagicMock()
@@ -166,3 +184,98 @@ def test_recognition_cleanup(mock_face_detection_class: MagicMock) -> None:
         pass
 
     mock_instance.close.assert_called_once()
+
+
+def test_recognition_fallback_to_haar_cascade() -> None:
+    """Tests that the processor falls back to Haar Cascade when MediaPipe solutions is disabled or fails."""
+    event_bus = MagicMock(spec=EventBus)
+
+    # Mock cv2.CascadeClassifier to return a deterministic face box
+    with patch("visionauth.recognition.recognition.cv2.CascadeClassifier") as mock_cascade_class:
+        mock_instance = MagicMock()
+        mock_instance.detectMultiScale.return_value = [(160, 120, 80, 80)]
+        mock_cascade_class.return_value = mock_instance
+
+        # Force fallback mode
+        recognition = Recognition(event_bus)
+        recognition.use_fallback = True
+
+        dummy_frame = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        results = recognition.process_frame(dummy_frame)
+
+        assert len(results) == 1
+        assert results[0].confidence == 0.8
+        # Scaled values: xmin=160/640=0.25, ymin=120/480=0.25, w=80/640=0.125, h=80/480=0.1667
+        assert results[0].bounding_box[0] == 0.25
+        assert results[0].bounding_box[1] == 0.25
+        assert results[0].bounding_box[2] == 0.125
+        assert results[0].bounding_box[3] == 80.0 / 480.0
+
+
+def test_recognition_aspect_ratio_filter() -> None:
+    """Tests that detections with non-human aspect ratios (too wide/tall) are rejected."""
+    event_bus = MagicMock(spec=EventBus)
+    with patch("visionauth.recognition.recognition.cv2.CascadeClassifier") as mock_cascade_class:
+        mock_instance = MagicMock()
+        # BBox 1: 100x100 (ratio 1.0 -> valid)
+        # BBox 2: 200x50 (ratio 4.0 -> invalid)
+        mock_instance.detectMultiScale.return_value = [(100, 100, 100, 100), (100, 100, 200, 50)]
+        mock_cascade_class.return_value = mock_instance
+
+        recognition = Recognition(event_bus)
+        recognition.use_fallback = True
+
+        dummy_frame = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        results = recognition.process_frame(dummy_frame)
+
+        assert len(results) == 1
+        # BBox 1 should be returned
+        assert results[0].bounding_box[2] == 100.0 / 640.0
+
+
+def test_recognition_lower_zone_filter() -> None:
+    """Tests that detections in the lower portion of the frame (neck/chest) are filtered."""
+    event_bus = MagicMock(spec=EventBus)
+    with patch("visionauth.recognition.recognition.cv2.CascadeClassifier") as mock_cascade_class:
+        mock_instance = MagicMock()
+        # BBox 1: ymin = 50 -> cy = 100 -> valid (upper zone)
+        # BBox 2: ymin = 350 -> cy = 400 -> invalid (lower zone)
+        mock_instance.detectMultiScale.return_value = [(100, 50, 100, 100), (100, 350, 100, 100)]
+        mock_cascade_class.return_value = mock_instance
+
+        recognition = Recognition(event_bus, max_face_offset_y=0.6)
+        recognition.use_fallback = True
+
+        dummy_frame = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        results = recognition.process_frame(dummy_frame)
+
+        assert len(results) == 1
+        assert results[0].bounding_box[1] == 50.0 / 480.0
+
+
+def test_recognition_temporal_stability() -> None:
+    """Tests that face detections are only returned after N consecutive stable frames."""
+    event_bus = MagicMock(spec=EventBus)
+    with patch("visionauth.recognition.recognition.cv2.CascadeClassifier") as mock_cascade_class:
+        mock_instance = MagicMock()
+        mock_instance.detectMultiScale.return_value = [(100, 100, 100, 100)]
+        mock_cascade_class.return_value = mock_instance
+
+        # Require N=3 consecutive stable frames
+        recognition = Recognition(event_bus, consecutive_frames_required=3)
+        recognition.use_fallback = True
+
+        dummy_frame = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        
+        # Frame 1: stability counter = 1 -> returns []
+        results_1 = recognition.process_frame(dummy_frame)
+        assert results_1 == []
+
+        # Frame 2: stability counter = 2 -> returns []
+        results_2 = recognition.process_frame(dummy_frame)
+        assert results_2 == []
+
+        # Frame 3: stability counter = 3 -> returns face!
+        results_3 = recognition.process_frame(dummy_frame)
+        assert len(results_3) == 1
+        assert results_3[0].bounding_box[0] == 100.0 / 640.0

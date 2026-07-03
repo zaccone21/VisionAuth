@@ -37,7 +37,12 @@ def test_camera_start_success(mock_video_capture: MagicMock) -> None:
 
     assert camera.is_running is True
     assert camera._cap == mock_cap_instance
-    mock_video_capture.assert_called_once_with(1)
+    import sys
+    if sys.platform == "win32":
+        import cv2
+        mock_video_capture.assert_called_once_with(1, cv2.CAP_DSHOW)
+    else:
+        mock_video_capture.assert_called_once_with(1)
 
     # Assert properties were set on the VideoCapture instance
     # CAP_PROP_FRAME_WIDTH = 3, CAP_PROP_FRAME_HEIGHT = 4, CAP_PROP_FPS = 5

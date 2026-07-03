@@ -71,7 +71,12 @@ class Camera:
 
         logger.info("Opening camera device index/source: %s", self.device_index)
 
-        self._cap = cv2.VideoCapture(self.device_index)
+        import sys
+
+        if sys.platform == "win32" and isinstance(self.device_index, int):
+            self._cap = cv2.VideoCapture(self.device_index, cv2.CAP_DSHOW)
+        else:
+            self._cap = cv2.VideoCapture(self.device_index)
 
         if not self._cap.isOpened():
             self._cap = None
