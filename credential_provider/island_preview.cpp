@@ -92,7 +92,7 @@ static int RenderSheet(IWICImagingFactory* wic, ID2D1Factory* factory, const wch
                            {3.4, ISLAND_UNRECOGNIZED}, {4.8, ISLAND_FACE}, {5.8, ISLAND_MATCH}};
     const double moments[] = {0.10, 0.25, 0.7, 1.4, 2.6, 3.46, 4.3, 5.92, 6.05, 6.3, 7.2};
     const int frames = sizeof(moments) / sizeof(moments[0]);
-    float rowW = 720 * scale, rowH = 150 * scale, labelW = 70 * scale;
+    float rowW = 960 * scale, rowH = 190 * scale, labelW = 70 * scale;
     UINT sheetW = static_cast<UINT>(rowW + labelW), sheetH = static_cast<UINT>(rowH * frames);
 
     IWICBitmap* sheet = nullptr;

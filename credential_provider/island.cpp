@@ -48,13 +48,14 @@ double PhaseGlow(LONG phase) {
 }
 
 // Layout at 100% scale, in pixels
-const float kCompactHeight = 64.0f;
-const float kSuccessHeight = 84.0f;
-const float kGlyph = 38.0f;
-const float kSuccessGlyph = 50.0f;
-const float kTextGap = 13.0f;
-const float kPadRight = 26.0f;
-const float kTopMargin = 16.0f;
+const float kCompactHeight = 84.0f;
+const float kSuccessHeight = 104.0f;
+const float kGlyph = 50.0f;
+const float kSuccessGlyph = 64.0f;
+const float kTextGap = 18.0f;
+const float kPadRight = 40.0f;
+const float kLineGap = 3.0f;  // between the label and the status line
+const float kTopMargin = 22.0f;
 
 float Clamp01(double x) { return static_cast<float>(x < 0 ? 0 : (x > 1 ? 1 : x)); }
 float EaseOutCubic(double t) {
@@ -191,11 +192,11 @@ struct IslandRenderer::Impl {
         IDWriteFactory* write = WriteFactory();
         if (!write) return;
         write->CreateTextFormat(L"Segoe UI Variable Text", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.5f * scale, L"es-ar", &label);
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.5f * scale, L"es-ar", &label);
         write->CreateTextFormat(L"Segoe UI Variable Display", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 19.5f * scale, L"es-ar", &status);
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 24.0f * scale, L"es-ar", &status);
         write->CreateTextFormat(L"Segoe UI Variable Display", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 25.0f * scale, L"es-ar",
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 31.0f * scale, L"es-ar",
                                 &greeting);
         for (IDWriteTextFormat* format : {label, status, greeting}) {
             if (format) format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -385,11 +386,81 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
         }
     }
 
-    // Body: pure black, with a barely visible edge so it reads on dark photos
-    brush->SetColor(D2D1::ColorF(0, 0, 0, 0.97f * alpha));
-    target->FillRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush);
-    brush->SetColor(D2D1::ColorF(1, 1, 1, 0.07f * alpha));
-    target->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius - 0.5f, radius - 0.5f), brush, 1.0f);
+    // Body: smoked glass. The sign-in screen behind it is already blurred, so
+    // a translucent tint reads as frosted glass without capturing the screen.
+    D2D1_ROUNDED_RECT body = D2D1::RoundedRect(pill, radius, radius);
+    brush->SetColor(D2D1::ColorF(0.075f, 0.07f, 0.065f, 0.70f * alpha));
+    target->FillRoundedRectangle(body, brush);
+    // A faint wash of the current accent, like light caught in the glass
+    brush->SetColor(ColorOf(accent, 0.06f * alpha));
+    target->FillRoundedRectangle(body, brush);
+    // Light from above: brighter top half fading out
+    {
+        D2D1_GRADIENT_STOP stops[3] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.13f * alpha)},
+                                       {0.5f, D2D1::ColorF(1, 1, 1, 0.025f * alpha)},
+                                       {1.0f, D2D1::ColorF(1, 1, 1, 0.0f)}};
+        ID2D1GradientStopCollection* collection = nullptr;
+        target->CreateGradientStopCollection(stops, 3, &collection);
+        ID2D1LinearGradientBrush* sheen = nullptr;
+        if (collection) {
+            target->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties({0, pill.top}, {0, pill.bottom}), collection, &sheen);
+        }
+        if (sheen) target->FillRoundedRectangle(body, sheen);
+        SafeRelease(sheen);
+        SafeRelease(collection);
+    }
+    // Grain: a tiled noise texture gives the glass some material
+    {
+        static BYTE noise[64 * 64 * 4];
+        static bool noiseReady = false;
+        if (!noiseReady) {
+            unsigned seed = 0x9E3779B9u;
+            for (int i = 0; i < 64 * 64; ++i) {
+                seed = seed * 1664525u + 1013904223u;
+                BYTE v = static_cast<BYTE>(seed >> 24);
+                BYTE a = static_cast<BYTE>(v > 128 ? (v - 128) / 6 : 0);  // premultiplied white specks
+                noise[i * 4 + 0] = noise[i * 4 + 1] = noise[i * 4 + 2] = a;
+                noise[i * 4 + 3] = a;
+            }
+            noiseReady = true;
+        }
+        ID2D1Bitmap* grain = nullptr;
+        target->CreateBitmap(D2D1::SizeU(64, 64), noise, 64 * 4,
+                             D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+                                                                      D2D1_ALPHA_MODE_PREMULTIPLIED)),
+                             &grain);
+        ID2D1BitmapBrush* grainBrush = nullptr;
+        if (grain) {
+            target->CreateBitmapBrush(grain,
+                                      D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP),
+                                      &grainBrush);
+        }
+        if (grainBrush) {
+            grainBrush->SetOpacity(0.55f * alpha);
+            target->FillRoundedRectangle(body, grainBrush);
+        }
+        SafeRelease(grainBrush);
+        SafeRelease(grain);
+    }
+    // Rim: a bright hairline on top fading to a dim one at the bottom
+    {
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.30f * alpha)},
+                                       {1.0f, D2D1::ColorF(1, 1, 1, 0.07f * alpha)}};
+        ID2D1GradientStopCollection* collection = nullptr;
+        target->CreateGradientStopCollection(stops, 2, &collection);
+        ID2D1LinearGradientBrush* rim = nullptr;
+        if (collection) {
+            target->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties({0, pill.top}, {0, pill.bottom}), collection, &rim);
+        }
+        if (rim) {
+            target->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius - 0.5f, radius - 0.5f), rim,
+                                         1.2f * scale);
+        }
+        SafeRelease(rim);
+        SafeRelease(collection);
+    }
 
     ID2D1RoundedRectangleGeometry* clip = nullptr;
     factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(pill, radius, radius), &clip);
@@ -410,18 +481,12 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     // Face glyph, fading out as the success disc comes in
     float faceAlpha = content * (1 - Clamp01(successAmount * 1.7));
     if (faceAlpha > 0.01f) {
+        // The face stays still: waiting states only pulse in brightness
         float breathe = 1, lookX = 0, lookY = 0, mouth = 0.35f;
         float faceAlphaScale = 1;
         switch (s.phase) {
-            case ISLAND_STARTING:
-                breathe = 0.94f + 0.04f * sinf(t * 3.2f);
-                faceAlphaScale = 0.6f + 0.3f * sinf(t * 3.2f);
-                break;
-            case ISLAND_SEARCHING:
-                breathe = 1 + 0.03f * sinf(t * 2.4f);
-                lookX = 0.05f * sinf(t * 1.3f);
-                lookY = 0.022f * sinf(t * 0.9f + 1);
-                break;
+            case ISLAND_STARTING: faceAlphaScale = 0.55f + 0.3f * sinf(t * 3.2f); break;
+            case ISLAND_SEARCHING: faceAlphaScale = 0.8f + 0.2f * sinf(t * 2.2f); break;
             case ISLAND_FACE: mouth = 1; break;
             case ISLAND_UNRECOGNIZED: mouth = 0; break;
             case ISLAND_MATCH: mouth = 1; break;
@@ -473,13 +538,13 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     float labelH = labelMetrics.height;
     auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, float opacity, float dy) {
         if (!layout || opacity <= 0.01f) return;
-        float blockH = labelH + metrics.height - 2 * scale;
-        float y = gy - blockH / 2 + labelH - 2 * scale + dy;
+        float blockH = labelH + kLineGap * scale + metrics.height;
+        float y = gy - blockH / 2 + labelH + kLineGap * scale + dy;
         brush->SetColor(ColorOf(kCream, opacity));
         target->DrawTextLayout({textX, y}, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
     if (labelLayout) {
-        float blockH = labelH + currentMetrics.height - 2 * scale;
+        float blockH = labelH + kLineGap * scale + currentMetrics.height;
         brush->SetColor(ColorOf(kWarmGray, content));
         target->DrawTextLayout({textX, gy - blockH / 2}, labelLayout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
@@ -601,8 +666,8 @@ bool IslandWindow::Create(HWND owner, HINSTANCE module) {
     UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
     scale_ = dpi ? dpi / 96.0f : 1.0f;
 
-    width_ = static_cast<int>(720 * scale_);
-    height_ = static_cast<int>(170 * scale_);
+    width_ = static_cast<int>(960 * scale_);
+    height_ = static_cast<int>(220 * scale_);
     const RECT& screen = info.rcMonitor;
     POINT position = {screen.left + ((screen.right - screen.left) - width_) / 2,
                       screen.top + static_cast<int>((screen.bottom - screen.top) * 0.05)};
