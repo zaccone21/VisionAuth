@@ -18,8 +18,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 | 4 | Reconocimiento | Hecha, falta calibrar el umbral |
 | 5 | Liveness | Pasivo, sin gestos (ver D10) |
 | 6 | Event Bus | Hecha |
-| 7 | Servicio residente | Hecha, falta probarla en la pantalla real |
-| 8 | Integración con Windows | Implementada, falta probarla en la pantalla real |
+| 7 | Servicio residente | Hecha |
+| 8 | Integración con Windows | Funciona (v0.1.0) |
 | 9 | GUI | Parcial: interfaz de enrollment tipo Face ID |
 
 ## Fase 1: estructura, configuración, logging
@@ -97,7 +97,8 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
        equipo real, con el PIN de respaldo y la guía de recuperación del
        README.
 6. [x] `scripts/install.ps1`, `scripts/uninstall.ps1` y guía de recuperación.
-7. [ ] Probar el desbloqueo real, con Win+L y al prender la PC.
+7. [x] Desbloqueo real con Win+L (2026-11-14): de 6 a 7.5 s desde el
+       bloqueo. Falta probarlo al prender la PC.
 8. [ ] Medir y acortar el tiempo hasta que la cámara está lista al prender.
 
 ## Fase 9: GUI
@@ -109,6 +110,6 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 
 ## Próximos pasos
 
-1. Instalar y probar el desbloqueo real.
-2. Medir y acortar el tiempo hasta que la cámara está lista al prender.
+1. Acortar el tiempo hasta desbloquear.
+2. Feedback visual en la pantalla de bloqueo.
 3. Calibrar el umbral de reconocimiento.
