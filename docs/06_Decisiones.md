@@ -248,3 +248,28 @@ Windows 11 Home) y la isla se dibuja sobre la de inicio de sesión.
 
 **Cómo revisarla sin bloquear:** `credential_provider/build/island_preview.exe
 salida.png` renderiza la animación cuadro por cuadro en una imagen.
+
+## D16. Isla estilo Apple/Claude, logo y saludo con el nombre
+
+**Decisión.**
+- La isla se dibuja con Direct2D y DirectWrite (Segoe UI Variable en peso
+  semibold) desde un hilo propio, sincronizado con el refresco de la pantalla
+  (`DwmFlush`), con animaciones de resortes. Con GDI+ y `WM_TIMER` el
+  movimiento se veía entrecortado aunque cada cuadro tardaba 1.6 ms.
+- Estética: píldora negra pura como la Dynamic Island, texto crema cálido,
+  acento coral al verificar, verde al reconocer. El indicador es un glifo
+  estilo Face ID (esquinas de visor y una cara) que mira alrededor mientras
+  busca y se convierte en un check al reconocer.
+- El logo de VisionAuth es ese glifo en coral sobre un cuadrado negro
+  redondeado (`assets/logo.png`); también es el ícono de la opción en la
+  pantalla de inicio de sesión.
+- Al reconocer, la isla dice "Hola, <nombre>". El nombre sale del nombre
+  completo de la cuenta de Windows o de `install.ps1 -DisplayName`, y el
+  servicio lo manda con el `MATCH`.
+
+**Implica.** Smart App Control está activo en este equipo y bloquea, según
+reputación, algunos binarios recién compilados sin firma (bloqueó la vista
+previa y una vez la DLL de prueba). Antes de instalar una DLL nueva hay que
+comprobar que Windows la deja cargar; si alguna vez la bloquea, VisionAuth
+no aparece y se entra con el PIN.
+

@@ -1,366 +1,576 @@
-// Drawing and hosting of the VisionAuth island (see island.h).
+// Drawing, animation and hosting of the VisionAuth island (see island.h).
 
 #define _WIN32_WINNT 0x0A00
 #include "island.h"
 
-#include <gdiplus.h>
+#include <d2d1.h>
+#include <dwmapi.h>
+#include <dwrite.h>
 #include <math.h>
+#include <string.h>
+#include <wchar.h>
 
-using namespace Gdiplus;
+#include <initializer_list>
 
 namespace {
 
-const double kPi = 3.14159265358979323846;
+const float kPi = 3.14159265f;
 
-// Layout at 100% scale, in pixels
-const float kPillHeight = 76.0f;
-const float kIndicator = 46.0f;
-const float kPadLeft = 15.0f;
-const float kGap = 15.0f;
-const float kPadRight = 30.0f;
-const float kTitleSize = 13.5f;
-const float kStatusSize = 22.0f;
-const float kMinWidth = 250.0f;
-
-// Timings, in seconds
-const double kAppear = 0.55;
-const double kHide = 0.25;
-const double kColorBlend = 0.30;
-const double kTextFadeOut = 0.14;
-const double kTextFadeIn = 0.26;
-const double kWidthMove = 0.40;
-
+// Palette: Apple's pure black island with Claude's warm cream and coral
 struct Rgb {
     float r, g, b;
 };
+const Rgb kCream = {0.961f, 0.953f, 0.925f};
+const Rgb kWarmGray = {0.651f, 0.631f, 0.596f};
+const Rgb kCoral = {0.851f, 0.467f, 0.341f};
+const Rgb kAmber = {0.961f, 0.643f, 0.231f};
+const Rgb kGreen = {0.188f, 0.820f, 0.345f};
+const Rgb kRed = {0.898f, 0.329f, 0.294f};
 
-Rgb PhaseColor(LONG phase) {
+Rgb PhaseAccent(LONG phase) {
     switch (phase) {
-        case ISLAND_STARTING: return {142, 142, 147};
-        case ISLAND_SEARCHING: return {229, 229, 234};
-        case ISLAND_FACE: return {10, 132, 255};
-        case ISLAND_UNRECOGNIZED: return {255, 159, 10};
-        case ISLAND_MATCH: return {48, 209, 88};
-        case ISLAND_BLOCKED: return {255, 69, 58};
-        default: return {255, 69, 58};
+        case ISLAND_STARTING: return kWarmGray;
+        case ISLAND_SEARCHING: return kCream;
+        case ISLAND_FACE: return kCoral;
+        case ISLAND_UNRECOGNIZED: return kAmber;
+        case ISLAND_MATCH: return kGreen;
+        default: return kRed;
     }
 }
 
-const wchar_t* PhaseText(LONG phase) {
+double PhaseGlow(LONG phase) {
     switch (phase) {
-        case ISLAND_STARTING: return L"Activando la cámara";
-        case ISLAND_SEARCHING: return L"Mirá a la cámara";
-        case ISLAND_FACE: return L"Te veo…";
-        case ISLAND_UNRECOGNIZED: return L"No te reconozco";
-        case ISLAND_MATCH: return L"¡Hola!";
-        case ISLAND_BLOCKED: return L"Entrá con tu PIN";
-        default: return L"Servicio no disponible";
+        case ISLAND_FACE: return 0.55;
+        case ISLAND_MATCH: return 1.0;
+        case ISLAND_UNRECOGNIZED: return 0.35;
+        default: return 0.0;
     }
 }
 
-double Clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
-double EaseOutCubic(double t) {
-    t = Clamp01(t);
-    return 1 - pow(1 - t, 3);
+// Layout at 100% scale, in pixels
+const float kCompactHeight = 64.0f;
+const float kSuccessHeight = 84.0f;
+const float kGlyph = 38.0f;
+const float kSuccessGlyph = 50.0f;
+const float kTextGap = 13.0f;
+const float kPadRight = 26.0f;
+const float kTopMargin = 16.0f;
+
+float Clamp01(double x) { return static_cast<float>(x < 0 ? 0 : (x > 1 ? 1 : x)); }
+float EaseOutCubic(double t) {
+    float c = Clamp01(t);
+    return 1 - (1 - c) * (1 - c) * (1 - c);
 }
-double EaseInOutCubic(double t) {
-    t = Clamp01(t);
-    return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2;
-}
-double EaseOutBack(double t) {
-    t = Clamp01(t);
-    const double c1 = 1.70158, c3 = c1 + 1;
-    return 1 + c3 * pow(t - 1, 3) + c1 * pow(t - 1, 2);
-}
-float Mix(float a, float b, double t) { return static_cast<float>(a + (b - a) * t); }
-Rgb MixRgb(Rgb a, Rgb b, double t) { return {Mix(a.r, b.r, t), Mix(a.g, b.g, t), Mix(a.b, b.b, t)}; }
-Color WithAlpha(Rgb c, double alpha) {
-    return Color(static_cast<BYTE>(Clamp01(alpha) * 255), static_cast<BYTE>(c.r), static_cast<BYTE>(c.g),
-                 static_cast<BYTE>(c.b));
+float SmoothStep(double t) {
+    float c = Clamp01(t);
+    return c * c * (3 - 2 * c);
 }
 
-void AddPill(GraphicsPath& path, float x, float y, float w, float h) {
-    float d = h;
-    if (w < d) w = d;
-    path.AddArc(x, y, d, d, 90, 180);
-    path.AddArc(x + w - d, y, d, d, 270, 180);
-    path.CloseFigure();
-}
-
-const wchar_t* PickFamily(const wchar_t* const* names, int count) {
-    for (int i = 0; i < count; ++i) {
-        FontFamily family(names[i]);
-        if (family.IsAvailable()) return names[i];
+// A damped spring: x follows target with the feel set by stiffness and damping.
+struct Spring {
+    double x = 0, v = 0, target = 0;
+    void Step(double dt, double stiffness, double damping) {
+        // Small substeps keep it stable whatever the frame rate
+        while (dt > 0) {
+            double h = dt > 1.0 / 240 ? 1.0 / 240 : dt;
+            double a = -stiffness * (x - target) - damping * v;
+            v += a * h;
+            x += v * h;
+            dt -= h;
+        }
     }
-    return L"Segoe UI";
+    bool Resting() const { return fabs(x - target) < 0.001 && fabs(v) < 0.01; }
+    void Snap(double value) {
+        x = target = value;
+        v = 0;
+    }
+};
+
+IDWriteFactory* WriteFactory() {
+    static IDWriteFactory* factory = nullptr;
+    if (!factory) {
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                            reinterpret_cast<IUnknown**>(&factory));
+    }
+    return factory;
+}
+
+template <typename T>
+void SafeRelease(T*& p) {
+    if (p) {
+        p->Release();
+        p = nullptr;
+    }
+}
+
+D2D1_COLOR_F ColorOf(Rgb c, float alpha) { return D2D1::ColorF(c.r, c.g, c.b, alpha); }
+
+// The Face ID style glyph: four viewfinder corners and a simple face.
+// look moves the face inside the frame, mouth goes from -1 (frown) to 1 (smile).
+void DrawFace(ID2D1RenderTarget* target, ID2D1Factory* factory, ID2D1StrokeStyle* round, ID2D1Brush* brush,
+              float cx, float cy, float size, float lookX, float lookY, float mouth) {
+    float half = size / 2, corner = size * 0.30f, radius = size * 0.17f, stroke = size * 0.072f;
+    float x0 = cx - half, y0 = cy - half, x1 = cx + half, y1 = cy + half;
+
+    ID2D1PathGeometry* path = nullptr;
+    if (FAILED(factory->CreatePathGeometry(&path))) return;
+    ID2D1GeometrySink* sink = nullptr;
+    if (SUCCEEDED(path->Open(&sink))) {
+        auto cornerPath = [&](D2D1_POINT_2F a, D2D1_POINT_2F b, D2D1_POINT_2F c, D2D1_POINT_2F d) {
+            sink->BeginFigure(a, D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(b);
+            sink->AddArc(D2D1::ArcSegment(c, D2D1::SizeF(radius, radius), 0, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                                          D2D1_ARC_SIZE_SMALL));
+            sink->AddLine(d);
+            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        };
+        cornerPath({x0, y0 + corner}, {x0, y0 + radius}, {x0 + radius, y0}, {x0 + corner, y0});
+        cornerPath({x1 - corner, y0}, {x1 - radius, y0}, {x1, y0 + radius}, {x1, y0 + corner});
+        cornerPath({x1, y1 - corner}, {x1, y1 - radius}, {x1 - radius, y1}, {x1 - corner, y1});
+        cornerPath({x0 + corner, y1}, {x0 + radius, y1}, {x0, y1 - radius}, {x0, y1 - corner});
+
+        float fx = cx + lookX, fy = cy + lookY;
+        // Eyes
+        for (float side : {-1.0f, 1.0f}) {
+            sink->BeginFigure({fx + side * size * 0.155f, fy - size * 0.155f}, D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine({fx + side * size * 0.155f, fy - size * 0.065f});
+            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+        // Nose
+        sink->BeginFigure({fx + size * 0.02f, fy - size * 0.135f}, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink->AddLine({fx + size * 0.02f, fy + size * 0.045f});
+        sink->AddLine({fx - size * 0.045f, fy + size * 0.045f});
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        // Mouth
+        float mouthY = fy + size * 0.165f;
+        sink->BeginFigure({fx - size * 0.155f, mouthY}, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink->AddQuadraticBezier(
+            D2D1::QuadraticBezierSegment({fx, mouthY + size * 0.13f * mouth}, {fx + size * 0.155f, mouthY}));
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        sink->Close();
+        sink->Release();
+        target->DrawGeometry(path, brush, stroke, round);
+    }
+    path->Release();
 }
 
 }  // namespace
 
-struct IslandState {
+// ---------------------------------------------------------------------------
+
+struct IslandRenderer::Impl {
     LONG phase = ISLAND_STARTING;
     LONG previousPhase = ISLAND_STARTING;
-    double phaseSince = 0;
-    Rgb colorFrom = PhaseColor(ISLAND_STARTING);
     bool visible = false;
-    double visibleSince = -100;
-    double hiddenSince = -100;
-    float widthFrom = 0;  // pill width (unscaled) when the current move started
-    float widthTo = 0;
-    double widthSince = -100;
-    const wchar_t* statusFamily = nullptr;
-    const wchar_t* titleFamily = nullptr;
+    double time = 0;       // total animation time
+    double phaseTime = 0;  // time in the current phase
+    wchar_t name[64] = L"";
 
-    Rgb ColorAt(double now) const {
-        return MixRgb(colorFrom, PhaseColor(phase), EaseInOutCubic((now - phaseSince) / kColorBlend));
+    Spring presence;  // 0 hidden .. 1 shown (overshoots a little)
+    Spring width, height, shake, glow, textIn, success;
+    Spring r, g, b;
+    bool sized = false;
+
+    // Text formats, created for the scale they were last used at
+    float formatScale = 0;
+    IDWriteTextFormat* label = nullptr;
+    IDWriteTextFormat* status = nullptr;
+    IDWriteTextFormat* greeting = nullptr;
+
+    ~Impl() { ReleaseFormats(); }
+    void ReleaseFormats() {
+        SafeRelease(label);
+        SafeRelease(status);
+        SafeRelease(greeting);
     }
-    float WidthAt(double now) const {
-        if (widthTo == 0) return 0;
-        return Mix(widthFrom, widthTo, EaseOutCubic((now - widthSince) / kWidthMove));
+
+    void EnsureFormats(float scale) {
+        if (formatScale == scale && label) return;
+        ReleaseFormats();
+        formatScale = scale;
+        IDWriteFactory* write = WriteFactory();
+        if (!write) return;
+        write->CreateTextFormat(L"Segoe UI Variable Text", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.5f * scale, L"es-ar", &label);
+        write->CreateTextFormat(L"Segoe UI Variable Display", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 19.5f * scale, L"es-ar", &status);
+        write->CreateTextFormat(L"Segoe UI Variable Display", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 25.0f * scale, L"es-ar",
+                                &greeting);
+        for (IDWriteTextFormat* format : {label, status, greeting}) {
+            if (format) format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+    }
+
+    void Text(LONG forPhase, wchar_t* out, size_t capacity) const {
+        const wchar_t* text;
+        switch (forPhase) {
+            case ISLAND_STARTING: text = L"Preparando la cámara"; break;
+            case ISLAND_SEARCHING: text = L"Mirá a la cámara"; break;
+            case ISLAND_FACE: text = L"Verificando…"; break;
+            case ISLAND_UNRECOGNIZED: text = L"No te reconozco"; break;
+            case ISLAND_BLOCKED: text = L"Entrá con tu PIN"; break;
+            case ISLAND_MATCH:
+                if (name[0]) {
+                    swprintf(out, capacity, L"Hola, %ls", name);
+                    return;
+                }
+                text = L"¡Hola!";
+                break;
+            default: text = L"VisionAuth no está activo"; break;
+        }
+        wcsncpy(out, text, capacity - 1);
+        out[capacity - 1] = L'\0';
+    }
+
+    IDWriteTextLayout* Layout(LONG forPhase) {
+        wchar_t text[96];
+        Text(forPhase, text, 96);
+        IDWriteTextFormat* format = forPhase == ISLAND_MATCH ? greeting : status;
+        IDWriteTextLayout* layout = nullptr;
+        if (format) WriteFactory()->CreateTextLayout(text, static_cast<UINT32>(wcslen(text)), format, 2000, 200, &layout);
+        return layout;
     }
 };
 
-// ---------------------------------------------------------------------------
-
-IslandRenderer::IslandRenderer() : state_(new IslandState()) {}
-IslandRenderer::~IslandRenderer() { delete state_; }
-
-void IslandRenderer::SetPhase(LONG phase, double now) {
-    if (phase == state_->phase) return;
-    state_->colorFrom = state_->ColorAt(now);
-    state_->previousPhase = state_->phase;
-    state_->phase = phase;
-    state_->phaseSince = now;
+IslandRenderer::IslandRenderer() : impl_(new Impl()) {
+    Rgb accent = PhaseAccent(impl_->phase);
+    impl_->r.Snap(accent.r);
+    impl_->g.Snap(accent.g);
+    impl_->b.Snap(accent.b);
+    impl_->textIn.Snap(1);
+    impl_->height.Snap(kCompactHeight);
 }
 
-void IslandRenderer::SetVisible(bool visible, double now) {
-    if (visible == state_->visible) return;
-    state_->visible = visible;
-    if (visible) {
-        state_->visibleSince = now;
-        state_->widthTo = 0;  // measured again on the next frame
+IslandRenderer::~IslandRenderer() { delete impl_; }
+
+void IslandRenderer::SetName(const wchar_t* name) {
+    wcsncpy(impl_->name, name ? name : L"", 63);
+    impl_->name[63] = L'\0';
+}
+
+void IslandRenderer::SetPhase(LONG phase) {
+    Impl& s = *impl_;
+    if (phase == s.phase) return;
+    s.previousPhase = s.phase;
+    s.phase = phase;
+    s.phaseTime = 0;
+    Rgb accent = PhaseAccent(phase);
+    s.r.target = accent.r;
+    s.g.target = accent.g;
+    s.b.target = accent.b;
+    s.glow.target = PhaseGlow(phase);
+    s.textIn.x = 0;
+    s.textIn.v = 0;
+    s.textIn.target = 1;
+    s.success.target = phase == ISLAND_MATCH ? 1 : 0;
+    s.height.target = phase == ISLAND_MATCH ? kSuccessHeight : kCompactHeight;
+    if (phase == ISLAND_UNRECOGNIZED) s.shake.v = 1100;  // a quick "no" shake
+}
+
+void IslandRenderer::SetVisible(bool visible) {
+    impl_->visible = visible;
+    impl_->presence.target = visible ? 1 : 0;
+}
+
+bool IslandRenderer::Settled() const { return !impl_->visible && impl_->presence.x < 0.002 && fabs(impl_->presence.v) < 0.01; }
+
+void IslandRenderer::Advance(double dt) {
+    Impl& s = *impl_;
+    s.time += dt;
+    s.phaseTime += dt;
+    s.presence.Step(dt, 210, 19);
+    s.width.Step(dt, 320, 28);
+    s.height.Step(dt, 320, 26);
+    s.shake.Step(dt, 900, 13);
+    s.glow.Step(dt, 110, 22);
+    s.textIn.Step(dt, 240, 31);
+    s.success.Step(dt, 260, 19);
+    s.r.Step(dt, 150, 25);
+    s.g.Step(dt, 150, 25);
+    s.b.Step(dt, 150, 25);
+}
+
+void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, float scale) {
+    Impl& s = *impl_;
+    float presence = static_cast<float>(s.presence.x);
+    if (presence <= 0.002f) return;
+    s.EnsureFormats(scale);
+    if (!s.label || !s.status || !s.greeting) return;
+
+    ID2D1Factory* factory = nullptr;
+    target->GetFactory(&factory);
+    ID2D1StrokeStyle* round = nullptr;
+    factory->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                                                           D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND),
+                               nullptr, 0, &round);
+    target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    target->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    // Measure the texts to size the pill
+    IDWriteTextLayout* labelLayout = nullptr;
+    WriteFactory()->CreateTextLayout(L"VisionAuth", 10, s.label, 2000, 200, &labelLayout);
+    IDWriteTextLayout* current = s.Layout(s.phase);
+    IDWriteTextLayout* previous = s.previousPhase != s.phase ? s.Layout(s.previousPhase) : nullptr;
+    DWRITE_TEXT_METRICS labelMetrics = {}, currentMetrics = {}, previousMetrics = {};
+    if (labelLayout) labelLayout->GetMetrics(&labelMetrics);
+    if (current) current->GetMetrics(&currentMetrics);
+    if (previous) previous->GetMetrics(&previousMetrics);
+
+    float successAmount = Clamp01(s.success.x);
+    float compactHeight = static_cast<float>(s.height.x);
+    float glyphUnscaled = kGlyph + (kSuccessGlyph - kGlyph) * successAmount;
+    float inset = (compactHeight - glyphUnscaled) / 2;
+    float textWidth = (currentMetrics.widthIncludingTrailingWhitespace > labelMetrics.width
+                           ? currentMetrics.widthIncludingTrailingWhitespace
+                           : labelMetrics.width) /
+                      scale;
+    float targetWidth = inset + glyphUnscaled + kTextGap + textWidth + kPadRight;
+    if (!s.sized) {
+        s.width.Snap(targetWidth);
+        s.sized = true;
     } else {
-        state_->hiddenSince = now;
-    }
-}
-
-bool IslandRenderer::Animating(double now) const {
-    // Spinners and pulses run continuously while shown; after hiding, only the fade
-    return state_->visible || now - state_->hiddenSince < kHide + 0.05;
-}
-
-void IslandRenderer::Render(void* bits, int width, int height, int stride, double now, float scale) {
-    IslandState& s = *state_;
-    Bitmap surface(width, height, stride, PixelFormat32bppPARGB, static_cast<BYTE*>(bits));
-    Graphics g(&surface);
-    g.SetCompositingMode(CompositingModeSourceCopy);
-    SolidBrush clear(Color(0, 0, 0, 0));
-    g.FillRectangle(&clear, 0, 0, width, height);
-    g.SetCompositingMode(CompositingModeSourceOver);
-    g.SetSmoothingMode(SmoothingModeAntiAlias);
-    g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-    g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
-
-    // Overall presence: grow in with a slight overshoot, fade out when hidden
-    double presence, opacity;
-    if (s.visible) {
-        double t = (now - s.visibleSince) / kAppear;
-        presence = EaseOutBack(t);
-        opacity = EaseOutCubic(t * 1.6);
-    } else {
-        double t = (now - s.hiddenSince) / kHide;
-        presence = 1 - 0.15 * EaseOutCubic(t);
-        opacity = 1 - EaseOutCubic(t);
-    }
-    if (opacity <= 0.001) return;
-
-    if (!s.statusFamily) {
-        static const wchar_t* const statusNames[] = {L"Segoe UI Variable Display Semib", L"Segoe UI Semibold"};
-        static const wchar_t* const titleNames[] = {L"Segoe UI Variable Text Semibold", L"Segoe UI Semibold"};
-        s.statusFamily = PickFamily(statusNames, 2);
-        s.titleFamily = PickFamily(titleNames, 2);
-    }
-    FontFamily statusFamily(s.statusFamily);
-    FontFamily titleFamily(s.titleFamily);
-    Font statusFont(&statusFamily, kStatusSize * scale, FontStyleRegular, UnitPixel);
-    Font titleFont(&titleFamily, kTitleSize * scale, FontStyleRegular, UnitPixel);
-    StringFormat format(StringFormat::GenericTypographic());
-    format.SetFormatFlags(format.GetFormatFlags() | StringFormatFlagsNoWrap | StringFormatFlagsMeasureTrailingSpaces);
-
-    // Target width follows the current status text
-    RectF measured;
-    const wchar_t* text = PhaseText(s.phase);
-    g.MeasureString(text, -1, &statusFont, PointF(0, 0), &format, &measured);
-    RectF titleMeasured;
-    g.MeasureString(L"VISIONAUTH", -1, &titleFont, PointF(0, 0), &format, &titleMeasured);
-    float textWidth = (measured.Width > titleMeasured.Width ? measured.Width : titleMeasured.Width) / scale;
-    float target = kPadLeft + kIndicator + kGap + textWidth + kPadRight;
-    if (target < kMinWidth) target = kMinWidth;
-    if (s.widthTo == 0) {
-        s.widthFrom = s.widthTo = target;
-        s.widthSince = now - kWidthMove;
-    } else if (fabs(target - s.widthTo) > 0.5f) {
-        s.widthFrom = s.WidthAt(now);
-        s.widthTo = target;
-        s.widthSince = now;
+        s.width.target = targetWidth;
     }
 
-    // The pill opens from a circle to its full width
-    float h = kPillHeight * scale;
-    float fullWidth = s.WidthAt(now) * scale;
-    float w = static_cast<float>(h + (fullWidth - h) * EaseOutCubic((now - s.visibleSince) / (kAppear * 0.9)));
-    if (!s.visible) w = fullWidth;
-    w = static_cast<float>(h + (w - h) * (presence > 1 ? 1 : presence));
-    float pillH = static_cast<float>(h * (0.86 + 0.14 * (presence > 1.0 ? 1.0 : presence)));
+    // Pill: opens from a circle, scales in with a little overshoot
+    float h = compactHeight * scale;
+    float fullWidth = static_cast<float>(s.width.x) * scale;
+    float open = SmoothStep((presence - 0.12) / 0.8);
+    float w = h + (fullWidth - h) * open;
+    float grow = 0.55f + 0.45f * presence;
+    float pillW = w * grow, pillH = h * grow;
+    float alpha = Clamp01(presence * 1.8);
+    float cx = areaWidth / 2 + static_cast<float>(s.shake.x) * scale * 0.012f;
+    float top = kTopMargin * scale + (h - pillH) / 2;
+    D2D1_RECT_F pill = D2D1::RectF(cx - pillW / 2, top, cx + pillW / 2, top + pillH);
+    float radius = pillH / 2;
+    Rgb accent = {static_cast<float>(s.r.x), static_cast<float>(s.g.x), static_cast<float>(s.b.x)};
 
-    // Shake sideways when the face was not recognized
-    float shake = 0;
-    if (s.phase == ISLAND_UNRECOGNIZED) {
-        double t = now - s.phaseSince;
-        if (t < 0.7) shake = static_cast<float>(sin(t * 46) * 9 * exp(-t * 6) * scale);
+    ID2D1SolidColorBrush* brush = nullptr;
+    target->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 0), &brush);
+    if (!brush) {
+        SafeRelease(round);
+        factory->Release();
+        return;
     }
-
-    float x = (width - w) / 2 + shake;
-    float y = 18 * scale + (h - pillH) / 2;
-    Rgb accent = s.ColorAt(now);
 
     // Soft shadow
-    for (int i = 10; i >= 1; --i) {
-        GraphicsPath shadow;
-        float grow = i * 1.6f * scale;
-        AddPill(shadow, x - grow, y - grow + 5 * scale, w + 2 * grow, pillH + 2 * grow);
-        SolidBrush brush(Color(static_cast<BYTE>(9 * opacity), 0, 0, 0));
-        g.FillPath(&brush, &shadow);
+    for (int i = 6; i >= 1; --i) {
+        float spread = i * 2.2f * scale;
+        brush->SetColor(D2D1::ColorF(0, 0, 0, 0.045f * alpha));
+        D2D1_RECT_F r = D2D1::RectF(pill.left - spread, pill.top - spread + 5 * scale, pill.right + spread,
+                                    pill.bottom + spread + 5 * scale);
+        target->FillRoundedRectangle(D2D1::RoundedRect(r, radius + spread, radius + spread), brush);
     }
 
-    // Glow around the pill while a face is in view or after a match
-    double glow = 0;
-    if (s.phase == ISLAND_FACE) glow = 0.35 + 0.25 * sin((now - s.phaseSince) * 5.0);
-    if (s.phase == ISLAND_MATCH) glow = 0.9 * (1 - EaseOutCubic((now - s.phaseSince) / 1.2)) + 0.25;
-    if (glow > 0) {
-        for (int i = 6; i >= 1; --i) {
-            GraphicsPath halo;
-            float grow = i * 2.2f * scale;
-            AddPill(halo, x - grow, y - grow, w + 2 * grow, pillH + 2 * grow);
-            SolidBrush brush(WithAlpha(accent, glow * opacity * 0.06 * (7 - i)));
-            g.FillPath(&brush, &halo);
+    // Colored glow beneath the pill
+    float glow = Clamp01(s.glow.x) * alpha;
+    if (s.phase == ISLAND_FACE) glow *= 0.8f + 0.2f * sinf(static_cast<float>(s.phaseTime) * 4.0f);
+    if (glow > 0.01f) {
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, ColorOf(accent, 0.55f * glow)}, {1.0f, ColorOf(accent, 0.0f)}};
+        ID2D1GradientStopCollection* collection = nullptr;
+        target->CreateGradientStopCollection(stops, 2, &collection);
+        if (collection) {
+            ID2D1RadialGradientBrush* halo = nullptr;
+            D2D1_POINT_2F center = D2D1::Point2F(cx, pill.top + pillH * 0.62f);
+            target->CreateRadialGradientBrush(
+                D2D1::RadialGradientBrushProperties(center, D2D1::Point2F(0, 0), pillW * 0.62f, pillH * 1.25f),
+                collection, &halo);
+            if (halo) {
+                target->FillEllipse(D2D1::Ellipse(center, pillW * 0.62f, pillH * 1.25f), halo);
+                halo->Release();
+            }
+            collection->Release();
         }
     }
 
-    // Body: near-black glass with a faint top highlight and hairline border
-    GraphicsPath body;
-    AddPill(body, x, y, w, pillH);
-    SolidBrush bodyBrush(Color(static_cast<BYTE>(236 * opacity), 16, 16, 19));
-    g.FillPath(&bodyBrush, &body);
-    {
-        // Highlight on the top half only; the blend keeps the gradient from
-        // repeating below its end, which drew a hard line across the middle
-        LinearGradientBrush shine(PointF(0, y - 1), PointF(0, y + pillH + 1),
-                                  Color(static_cast<BYTE>(24 * opacity), 255, 255, 255), Color(0, 255, 255, 255));
-        const REAL factors[3] = {0.0f, 1.0f, 1.0f};
-        const REAL positions[3] = {0.0f, 0.5f, 1.0f};
-        shine.SetBlend(factors, positions, 3);
-        g.FillPath(&shine, &body);
+    // Body: pure black, with a barely visible edge so it reads on dark photos
+    brush->SetColor(D2D1::ColorF(0, 0, 0, 0.97f * alpha));
+    target->FillRoundedRectangle(D2D1::RoundedRect(pill, radius, radius), brush);
+    brush->SetColor(D2D1::ColorF(1, 1, 1, 0.07f * alpha));
+    target->DrawRoundedRectangle(D2D1::RoundedRect(pill, radius - 0.5f, radius - 0.5f), brush, 1.0f);
+
+    ID2D1RoundedRectangleGeometry* clip = nullptr;
+    factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(pill, radius, radius), &clip);
+    ID2D1Layer* layer = nullptr;
+    target->CreateLayer(&layer);
+    if (clip && layer) {
+        target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), clip), layer);
     }
-    Pen border(Color(static_cast<BYTE>(38 * opacity), 255, 255, 255), 1.0f * scale);
-    g.DrawPath(&border, &body);
 
-    // Everything inside is clipped to the pill while it opens
-    g.SetClip(&body);
+    float content = Clamp01((presence - 0.55) / 0.4) * alpha;
+    float glyph = glyphUnscaled * scale * grow;
+    float glyphInset = (pillH - glyph) / 2;
+    float gx = pill.left + glyphInset + glyph / 2;
+    float gy = pill.top + pillH / 2;
+    float t = static_cast<float>(s.time);
+    float pt = static_cast<float>(s.phaseTime);
 
-    float r = kIndicator * scale / 2;
-    float cx = x + (kPadLeft * scale) + r;
-    float cy = y + pillH / 2;
-    double phaseTime = now - s.phaseSince;
-    // Content fades in once the pill is nearly open, so text is never cut off
-    double contentAlpha = opacity * EaseOutCubic((now - s.visibleSince - 0.34) / 0.3);
-    if (!s.visible) contentAlpha = opacity;
+    // Face glyph, fading out as the success disc comes in
+    float faceAlpha = content * (1 - Clamp01(successAmount * 1.7));
+    if (faceAlpha > 0.01f) {
+        float breathe = 1, lookX = 0, lookY = 0, mouth = 0.35f;
+        float faceAlphaScale = 1;
+        switch (s.phase) {
+            case ISLAND_STARTING:
+                breathe = 0.94f + 0.04f * sinf(t * 3.2f);
+                faceAlphaScale = 0.6f + 0.3f * sinf(t * 3.2f);
+                break;
+            case ISLAND_SEARCHING:
+                breathe = 1 + 0.03f * sinf(t * 2.4f);
+                lookX = 0.05f * sinf(t * 1.3f);
+                lookY = 0.022f * sinf(t * 0.9f + 1);
+                break;
+            case ISLAND_FACE: mouth = 1; break;
+            case ISLAND_UNRECOGNIZED: mouth = 0; break;
+            case ISLAND_MATCH: mouth = 1; break;
+            default: mouth = -0.6f; break;
+        }
+        float size = glyph * breathe * (1 - 0.3f * successAmount);
+        brush->SetColor(ColorOf(accent, faceAlpha * faceAlphaScale));
+        DrawFace(target, factory, round, brush, gx, gy, size, lookX * size, lookY * size, mouth);
 
-    if (s.phase == ISLAND_MATCH) {
-        // Green disc pops in, then the check draws itself
-        double pop = EaseOutBack(phaseTime / 0.32);
-        float rr = static_cast<float>(r * pop);
-        SolidBrush disc(WithAlpha(accent, contentAlpha));
-        g.FillEllipse(&disc, cx - rr, cy - rr, 2 * rr, 2 * rr);
-        double draw = EaseOutCubic((phaseTime - 0.18) / 0.28);
-        if (draw > 0) {
-            PointF a(cx - 0.36f * r, cy + 0.02f * r), b(cx - 0.10f * r, cy + 0.28f * r), c(cx + 0.38f * r, cy - 0.26f * r);
-            float firstLength = static_cast<float>(hypot(b.X - a.X, b.Y - a.Y));
-            float secondLength = static_cast<float>(hypot(c.X - b.X, c.Y - b.Y));
-            float drawn = static_cast<float>(draw * (firstLength + secondLength));
-            Pen check(Color(static_cast<BYTE>(255 * contentAlpha), 255, 255, 255), 4.2f * scale);
-            check.SetStartCap(LineCapRound);
-            check.SetEndCap(LineCapRound);
-            check.SetLineJoin(LineJoinRound);
-            if (drawn <= firstLength) {
-                float k = drawn / firstLength;
-                g.DrawLine(&check, a, PointF(a.X + (b.X - a.X) * k, a.Y + (b.Y - a.Y) * k));
+        if (s.phase == ISLAND_FACE) {
+            // Scan line sweeping down the frame
+            float sweep = fmodf(pt * 0.85f, 1.0f);
+            float y = gy - size * 0.42f + sweep * size * 0.84f;
+            float fade = sinf(sweep * kPi);
+            brush->SetColor(ColorOf(accent, 0.75f * fade * faceAlpha));
+            target->DrawLine({gx - size * 0.36f, y}, {gx + size * 0.36f, y}, brush, size * 0.045f, round);
+        }
+    }
+
+    // Success: a green disc pops in and the check draws itself
+    if (successAmount > 0.01f || s.success.x > 0.01) {
+        float pop = static_cast<float>(s.success.x);
+        float discR = glyph / 2 * (pop < 0 ? 0 : pop);
+        brush->SetColor(ColorOf(kGreen, content * Clamp01(pop * 2)));
+        target->FillEllipse(D2D1::Ellipse({gx, gy}, discR, discR), brush);
+        float draw = s.phase == ISLAND_MATCH ? EaseOutCubic((pt - 0.14) / 0.3) : 1;
+        if (draw > 0 && discR > 1) {
+            D2D1_POINT_2F a = {gx - 0.42f * discR, gy + 0.02f * discR};
+            D2D1_POINT_2F b = {gx - 0.12f * discR, gy + 0.31f * discR};
+            D2D1_POINT_2F c = {gx + 0.44f * discR, gy - 0.30f * discR};
+            float first = hypotf(b.x - a.x, b.y - a.y), second = hypotf(c.x - b.x, c.y - b.y);
+            float drawn = draw * (first + second);
+            brush->SetColor(D2D1::ColorF(1, 1, 1, content * Clamp01(pop * 2)));
+            float stroke = discR * 0.19f;
+            if (drawn <= first) {
+                float k = drawn / first;
+                target->DrawLine(a, {a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k}, brush, stroke, round);
             } else {
-                float k = (drawn - firstLength) / secondLength;
-                PointF points[3] = {a, b, PointF(b.X + (c.X - b.X) * k, b.Y + (c.Y - b.Y) * k)};
-                g.DrawLines(&check, points, 3);
+                float k = (drawn - first) / second;
+                target->DrawLine(a, b, brush, stroke, round);
+                target->DrawLine(b, {b.x + (c.x - b.x) * k, b.y + (c.y - b.y) * k}, brush, stroke, round);
             }
         }
-    } else if (s.phase == ISLAND_UNRECOGNIZED || s.phase == ISLAND_BLOCKED || s.phase == ISLAND_OFFLINE) {
-        // Ring with an exclamation mark
-        Pen ring(WithAlpha(accent, contentAlpha), 3.0f * scale);
-        g.DrawEllipse(&ring, cx - r + 2 * scale, cy - r + 2 * scale, 2 * r - 4 * scale, 2 * r - 4 * scale);
-        Pen bar(WithAlpha(accent, contentAlpha), 3.6f * scale);
-        bar.SetStartCap(LineCapRound);
-        bar.SetEndCap(LineCapRound);
-        g.DrawLine(&bar, cx, cy - 0.42f * r, cx, cy + 0.10f * r);
-        SolidBrush dot(WithAlpha(accent, contentAlpha));
-        float d = 4.2f * scale;
-        g.FillEllipse(&dot, cx - d / 2, cy + 0.34f * r - d / 2, d, d);
-    } else {
-        // Spinner: a faint track and an arc that breathes while it turns
-        float inset = 3 * scale;
-        RectF arcBox(cx - r + inset, cy - r + inset, 2 * (r - inset), 2 * (r - inset));
-        Pen track(WithAlpha(accent, 0.16 * contentAlpha), 3.4f * scale);
-        g.DrawEllipse(&track, arcBox);
-        double speed = s.phase == ISLAND_FACE ? 1.9 : (s.phase == ISLAND_STARTING ? 0.8 : 1.15);
-        double turn = now * speed * 360.0;
-        double sweep = 70 + 160 * (0.5 + 0.5 * sin(now * 3.1));
-        Pen arc(WithAlpha(accent, contentAlpha), 3.4f * scale);
-        arc.SetStartCap(LineCapRound);
-        arc.SetEndCap(LineCapRound);
-        g.DrawArc(&arc, arcBox, static_cast<REAL>(fmod(turn, 360.0)), static_cast<REAL>(sweep));
-        if (s.phase == ISLAND_FACE) {
-            // Pulsing core: "I see you"
-            double pulse = 0.5 + 0.5 * sin(now * 6.0);
-            float core = static_cast<float>(r * (0.22 + 0.08 * pulse));
-            SolidBrush coreBrush(WithAlpha(accent, contentAlpha * (0.65 + 0.35 * pulse)));
-            g.FillEllipse(&coreBrush, cx - core, cy - core, 2 * core, 2 * core);
-        } else {
-            float core = r * 0.16f;
-            SolidBrush coreBrush(WithAlpha(accent, contentAlpha * 0.55));
-            g.FillEllipse(&coreBrush, cx - core, cy - core, 2 * core, 2 * core);
+    }
+
+    // Text: brand label above, status below, cross-fading and sliding on change
+    float textX = gx + glyph / 2 + kTextGap * scale;
+    float in = Clamp01(s.textIn.x);
+    float labelH = labelMetrics.height;
+    auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, float opacity, float dy) {
+        if (!layout || opacity <= 0.01f) return;
+        float blockH = labelH + metrics.height - 2 * scale;
+        float y = gy - blockH / 2 + labelH - 2 * scale + dy;
+        brush->SetColor(ColorOf(kCream, opacity));
+        target->DrawTextLayout({textX, y}, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    };
+    if (labelLayout) {
+        float blockH = labelH + currentMetrics.height - 2 * scale;
+        brush->SetColor(ColorOf(kWarmGray, content));
+        target->DrawTextLayout({textX, gy - blockH / 2}, labelLayout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+    // One after the other, never on top of each other: the old text leaves in
+    // the first part of the transition, the new one arrives after it
+    drawStatus(previous, previousMetrics, content * (1 - Clamp01(in * 2.4)), -10 * scale * in);
+    drawStatus(current, currentMetrics, content * Clamp01((in - 0.32) / 0.68), 10 * scale * (1 - in));
+
+    if (clip && layer) target->PopLayer();
+    SafeRelease(layer);
+    SafeRelease(clip);
+    SafeRelease(labelLayout);
+    SafeRelease(current);
+    SafeRelease(previous);
+    brush->Release();
+    SafeRelease(round);
+    factory->Release();
+}
+
+// ---------------------------------------------------------------------------
+
+void DrawVisionAuthLogo(ID2D1RenderTarget* target, float left, float top, float size) {
+    ID2D1Factory* factory = nullptr;
+    target->GetFactory(&factory);
+    ID2D1StrokeStyle* round = nullptr;
+    factory->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                                                           D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND),
+                               nullptr, 0, &round);
+    target->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+
+    D2D1_RECT_F box = D2D1::RectF(left, top, left + size, top + size);
+    D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(0.17f, 0.16f, 0.15f, 1)},
+                                   {1.0f, D2D1::ColorF(0.05f, 0.05f, 0.045f, 1)}};
+    ID2D1GradientStopCollection* collection = nullptr;
+    target->CreateGradientStopCollection(stops, 2, &collection);
+    ID2D1LinearGradientBrush* background = nullptr;
+    if (collection) {
+        target->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties({left, top}, {left, top + size}), collection, &background);
+    }
+    float corner = size * 0.225f;
+    if (background) target->FillRoundedRectangle(D2D1::RoundedRect(box, corner, corner), background);
+
+    ID2D1SolidColorBrush* brush = nullptr;
+    target->CreateSolidColorBrush(ColorOf(kCoral, 1), &brush);
+    if (brush) {
+        DrawFace(target, factory, round, brush, left + size / 2, top + size / 2, size * 0.56f, 0, 0, 1);
+        brush->Release();
+    }
+    SafeRelease(background);
+    SafeRelease(collection);
+    SafeRelease(round);
+    factory->Release();
+}
+
+HBITMAP CreateVisionAuthLogoBitmap(int size) {
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = size;
+    info.bmiHeader.biHeight = -size;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap) return nullptr;
+    memset(bits, 0, static_cast<size_t>(size) * size * 4);
+
+    ID2D1Factory* factory = nullptr;
+    D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (factory && dc) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        ID2D1DCRenderTarget* target = nullptr;
+        D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+        if (SUCCEEDED(factory->CreateDCRenderTarget(&properties, &target))) {
+            RECT rect = {0, 0, size, size};
+            target->BindDC(dc, &rect);
+            target->BeginDraw();
+            target->Clear(D2D1::ColorF(0, 0, 0, 0));
+            DrawVisionAuthLogo(target, 0, 0, static_cast<float>(size));
+            target->EndDraw();
+            target->Release();
         }
+        SelectObject(dc, old);
     }
-
-    // Text: small caps title, large status that cross-fades and slides on change
-    float textX = cx + r + kGap * scale;
-    float titleY = cy - 26 * scale;
-    SolidBrush titleBrush(Color(static_cast<BYTE>(140 * contentAlpha), 255, 255, 255));
-    g.DrawString(L"VISIONAUTH", -1, &titleFont, PointF(textX, titleY), &format, &titleBrush);
-
-    float statusY = cy - 7 * scale;
-    double outT = phaseTime / kTextFadeOut;
-    if (outT < 1 && s.previousPhase != s.phase) {
-        double a = 1 - EaseOutCubic(outT);
-        SolidBrush oldBrush(Color(static_cast<BYTE>(255 * a * contentAlpha), 255, 255, 255));
-        g.DrawString(PhaseText(s.previousPhase), -1, &statusFont,
-                     PointF(textX, statusY - static_cast<float>(8 * scale * (1 - a))), &format, &oldBrush);
-    }
-    double inT = s.previousPhase == s.phase ? 1 : (phaseTime - kTextFadeOut * 0.6) / kTextFadeIn;
-    double in = EaseOutCubic(inT);
-    if (in > 0) {
-        Rgb statusColor = s.phase == ISLAND_MATCH ? MixRgb({255, 255, 255}, accent, 0.55) : Rgb{255, 255, 255};
-        SolidBrush brush(WithAlpha(statusColor, in * contentAlpha));
-        g.DrawString(text, -1, &statusFont, PointF(textX, statusY + static_cast<float>(8 * scale * (1 - in))), &format,
-                     &brush);
-    }
-    g.ResetClip();
+    if (dc) DeleteDC(dc);
+    SafeRelease(factory);
+    return bitmap;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,26 +583,15 @@ double IslandNow() {
     return static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
 }
 
-ULONG_PTR IslandStartGdiplus() {
-    GdiplusStartupInput input;
-    ULONG_PTR token = 0;
-    return GdiplusStartup(&token, &input, nullptr) == Ok ? token : 0;
-}
-
-void IslandStopGdiplus(ULONG_PTR token) {
-    if (token) GdiplusShutdown(token);
-}
-
 namespace {
 const wchar_t kIslandClass[] = L"VisionAuthIsland";
-const UINT_PTR kFrameTimer = 1;
-}  // namespace
+}
 
 bool IslandWindow::Create(HWND owner, HINSTANCE module) {
     if (window_) return true;
     module_ = module;
-    gdiplusToken_ = IslandStartGdiplus();
-    if (!gdiplusToken_) return false;
+    InitializeCriticalSection(&lock_);
+    lockReady_ = true;
 
     HMONITOR monitor = owner ? MonitorFromWindow(owner, MONITOR_DEFAULTTOPRIMARY)
                              : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
@@ -402,11 +601,11 @@ bool IslandWindow::Create(HWND owner, HINSTANCE module) {
     UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
     scale_ = dpi ? dpi / 96.0f : 1.0f;
 
-    width_ = static_cast<int>(620 * scale_);
-    height_ = static_cast<int>(130 * scale_);
+    width_ = static_cast<int>(720 * scale_);
+    height_ = static_cast<int>(170 * scale_);
     const RECT& screen = info.rcMonitor;
-    position_.x = screen.left + ((screen.right - screen.left) - width_) / 2;
-    position_.y = screen.top + static_cast<int>((screen.bottom - screen.top) * 0.06);
+    POINT position = {screen.left + ((screen.right - screen.left) - width_) / 2,
+                      screen.top + static_cast<int>((screen.bottom - screen.top) * 0.05)};
 
     WNDCLASSEXW windowClass = {};
     windowClass.cbSize = sizeof(windowClass);
@@ -416,13 +615,12 @@ bool IslandWindow::Create(HWND owner, HINSTANCE module) {
     RegisterClassExW(&windowClass);
 
     window_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                              kIslandClass, L"VisionAuth", WS_POPUP, position_.x, position_.y, width_, height_, owner,
+                              kIslandClass, L"VisionAuth", WS_POPUP, position.x, position.y, width_, height_, owner,
                               nullptr, module_, nullptr);
     if (!window_) {
         Destroy();
         return false;
     }
-    SetWindowLongPtrW(window_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     BITMAPINFO bitmapInfo = {};
     bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -431,77 +629,145 @@ bool IslandWindow::Create(HWND owner, HINSTANCE module) {
     bitmapInfo.bmiHeader.biPlanes = 1;
     bitmapInfo.bmiHeader.biBitCount = 32;
     bitmapInfo.bmiHeader.biCompression = BI_RGB;
-    HDC screenDc = GetDC(nullptr);
-    memoryDc_ = CreateCompatibleDC(screenDc);
-    surface_ = CreateDIBSection(screenDc, &bitmapInfo, DIB_RGB_COLORS, &bits_, nullptr, 0);
-    ReleaseDC(nullptr, screenDc);
+    memoryDc_ = CreateCompatibleDC(nullptr);
+    surface_ = CreateDIBSection(nullptr, &bitmapInfo, DIB_RGB_COLORS, &bits_, nullptr, 0);
     if (!memoryDc_ || !surface_ || !bits_) {
         Destroy();
         return false;
     }
     previousBitmap_ = SelectObject(memoryDc_, surface_);
+    memset(bits_, 0, static_cast<size_t>(width_) * height_ * 4);
+
+    // Place it with an empty frame; the render thread only updates the pixels
+    SIZE size = {width_, height_};
+    POINT source = {0, 0};
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(window_, nullptr, &position, &size, memoryDc_, &source, 0, &blend, ULW_ALPHA);
+    ShowWindow(window_, SW_SHOWNOACTIVATE);
 
     renderer_ = new IslandRenderer();
-    ShowWindow(window_, SW_SHOWNOACTIVATE);
+    stop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    thread_ = CreateThread(nullptr, 0, &RenderThread, this, 0, nullptr);
+    if (!thread_) {
+        Destroy();
+        return false;
+    }
     return true;
+}
+
+void IslandWindow::Wake() {
+    if (wake_) SetEvent(wake_);
 }
 
 void IslandWindow::SetPhase(LONG phase) {
     if (!renderer_) return;
-    renderer_->SetPhase(phase, IslandNow());
-    EnsureTimer();
+    EnterCriticalSection(&lock_);
+    renderer_->SetPhase(phase);
+    LeaveCriticalSection(&lock_);
+    // Stay above LogonUI's own windows (done here, on the window's thread)
+    SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    Wake();
 }
 
 void IslandWindow::SetVisible(bool visible) {
     if (!renderer_) return;
-    renderer_->SetVisible(visible, IslandNow());
-    EnsureTimer();
+    EnterCriticalSection(&lock_);
+    renderer_->SetVisible(visible);
+    LeaveCriticalSection(&lock_);
+    Wake();
 }
 
-void IslandWindow::EnsureTimer() {
-    if (window_ && !timerRunning_) {
-        SetTimer(window_, kFrameTimer, 16, nullptr);
-        timerRunning_ = true;
-    }
+void IslandWindow::SetName(const wchar_t* name) {
+    if (!renderer_) return;
+    EnterCriticalSection(&lock_);
+    renderer_->SetName(name);
+    LeaveCriticalSection(&lock_);
 }
 
-void IslandWindow::Tick() {
-    if (!renderer_ || !window_) return;
-    double now = IslandNow();
-    renderer_->Render(bits_, width_, height_, width_ * 4, now, scale_);
+DWORD WINAPI IslandWindow::RenderThread(LPVOID parameter) {
+    static_cast<IslandWindow*>(parameter)->RenderLoop();
+    return 0;
+}
 
+void IslandWindow::RenderLoop() {
+    ID2D1Factory* factory = nullptr;
+    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory))) return;
+    ID2D1DCRenderTarget* target = nullptr;
+    RECT rect = {0, 0, width_, height_};
     SIZE size = {width_, height_};
     POINT source = {0, 0};
     BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-    UpdateLayeredWindow(window_, nullptr, &position_, &size, memoryDc_, &source, 0, &blend, ULW_ALPHA);
-    // Stay above LogonUI's own windows
-    SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    double last = IslandNow();
 
-    if (!renderer_->Animating(now)) {
-        KillTimer(window_, kFrameTimer);
-        timerRunning_ = false;
+    while (WaitForSingleObject(stop_, 0) == WAIT_TIMEOUT) {
+        if (!target) {
+            D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
+                D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+            if (FAILED(factory->CreateDCRenderTarget(&properties, &target))) break;
+        }
+        double now = IslandNow();
+        double dt = now - last;
+        if (dt > 0.05) dt = 0.05;
+        last = now;
+
+        EnterCriticalSection(&lock_);
+        renderer_->Advance(dt);
+        bool settled = renderer_->Settled();
+        target->BindDC(memoryDc_, &rect);
+        target->BeginDraw();
+        target->Clear(D2D1::ColorF(0, 0, 0, 0));
+        renderer_->Draw(target, static_cast<float>(width_), static_cast<float>(height_), scale_);
+        HRESULT hr = target->EndDraw();
+        LeaveCriticalSection(&lock_);
+        if (hr == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) SafeRelease(target);
+
+        // Same position and size: only the pixels change, no messages to the owner thread
+        UpdateLayeredWindow(window_, nullptr, nullptr, &size, memoryDc_, &source, 0, &blend, ULW_ALPHA);
+
+        if (settled) {
+            HANDLE events[2] = {stop_, wake_};
+            if (WaitForMultipleObjects(2, events, FALSE, INFINITE) == WAIT_OBJECT_0) break;
+            last = IslandNow();
+            continue;
+        }
+        // Next frame in step with the display
+        if (FAILED(DwmFlush())) Sleep(8);
     }
+    SafeRelease(target);
+    factory->Release();
 }
 
 LRESULT CALLBACK IslandWindow::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-    if (message == WM_TIMER && wparam == kFrameTimer) {
-        auto* self = reinterpret_cast<IslandWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (self) self->Tick();
-        return 0;
-    }
     if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
 void IslandWindow::Destroy() {
+    if (thread_) {
+        SetEvent(stop_);
+        // Pump messages the render thread might send to this thread while it finishes
+        while (MsgWaitForMultipleObjects(1, &thread_, FALSE, 3000, QS_SENDMESSAGE) == WAIT_OBJECT_0 + 1) {
+            MSG message;
+            PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE);
+        }
+        CloseHandle(thread_);
+        thread_ = nullptr;
+    }
+    if (stop_) {
+        CloseHandle(stop_);
+        stop_ = nullptr;
+    }
+    if (wake_) {
+        CloseHandle(wake_);
+        wake_ = nullptr;
+    }
     if (window_) {
-        KillTimer(window_, kFrameTimer);
-        SetWindowLongPtrW(window_, GWLP_USERDATA, 0);
         DestroyWindow(window_);
         window_ = nullptr;
         UnregisterClassW(kIslandClass, module_);
     }
-    timerRunning_ = false;
     delete renderer_;
     renderer_ = nullptr;
     if (memoryDc_) {
@@ -515,6 +781,8 @@ void IslandWindow::Destroy() {
     }
     bits_ = nullptr;
     previousBitmap_ = nullptr;
-    IslandStopGdiplus(gdiplusToken_);
-    gdiplusToken_ = 0;
+    if (lockReady_) {
+        DeleteCriticalSection(&lock_);
+        lockReady_ = false;
+    }
 }

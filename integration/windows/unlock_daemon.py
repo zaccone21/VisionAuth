@@ -70,7 +70,8 @@ def build(config: dict[str, Any]) -> tuple[UnlockService, PipeServer]:
             user = service.take_verification()
             if user:
                 logger.info("Verification handed to the sign-in screen for '%s'.", user)
-                return f"MATCH {user}"
+                # The sign-in screen greets the owner by this name
+                return f"MATCH {config.get('display_name') or user}"
             return f"STATE {service.phase}"
         return "ERROR unknown request"
 

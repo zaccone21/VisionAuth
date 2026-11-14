@@ -18,7 +18,9 @@ param(
     [Parameter(Mandatory = $true)][string]$ProfileName,
     [int]$Camera = 0,
     # Skip the clock screen, so locking shows the sign-in screen and its island
-    [switch]$SkipLockScreen
+    [switch]$SkipLockScreen,
+    # Name in the greeting ("Hola, <name>"); defaults to the account's first name
+    [string]$DisplayName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +49,11 @@ $passwordScript = Join-Path $projectRoot "scripts\set_password.py"
 # The boot probe used during development would compete for the camera
 Unregister-ScheduledTask -TaskName "VisionAuthBootCameraProbe" -Confirm:$false -ErrorAction SilentlyContinue
 
+if (-not $DisplayName) {
+    $fullName = (Get-LocalUser -Name $env:USERNAME).FullName
+    $DisplayName = if ($fullName) { ($fullName -split ' ')[0] } else { $env:USERNAME }
+}
+
 # 1. Configuration
 New-Item -ItemType Directory -Force -Path $ProgramData | Out-Null
 $config = [ordered]@{
@@ -54,6 +61,7 @@ $config = [ordered]@{
     site     = @($userSite)
     data_dir = (Join-Path $projectRoot "data")
     camera   = $Camera
+    display_name = $DisplayName
 }
 $config | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $ProgramData "config.json") -Encoding UTF8
 Write-Host "Configuración escrita: $ProgramData\config.json (usuario $env:USERNAME -> perfil $ProfileName)"

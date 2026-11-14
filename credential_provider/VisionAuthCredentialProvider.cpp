@@ -92,6 +92,7 @@ struct SharedState {
     LONG pending = 0;   // the service verified the owner; log on at the next chance
     LONG blocked = 0;   // a logon with the stored password failed: stop until the next lock
     LONG phase = PH_STARTING;
+    wchar_t name[64] = L"";  // greeting name sent with MATCH
     CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario = CPUS_INVALID;
 
     void AddRef() { InterlockedIncrement(&refs); }
@@ -140,8 +141,8 @@ static Phase ParseReply(const char* reply) {
     return PH_SEARCHING;
 }
 
-// Asks the service once.
-static Phase AskService() {
+// Asks the service once. On MATCH, copies the greeting name into name.
+static Phase AskService(wchar_t* name, int capacity) {
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (int attempt = 0; attempt < 3 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
         pipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
@@ -168,6 +169,16 @@ static Phase AskService() {
             DWORD read = 0;
             if (ReadFile(pipe, reply, sizeof(reply) - 1, &read, nullptr) && read >= 5) {
                 phase = ParseReply(reply);
+                if (phase == PH_MATCH && name) {
+                    // "MATCH <name>" followed by a newline, in UTF-8
+                    char* text = reply + 5;
+                    while (*text == ' ') ++text;
+                    char* stop = text;
+                    while (*stop && *stop != '\r' && *stop != '\n') ++stop;
+                    int length = MultiByteToWideChar(CP_UTF8, 0, text, static_cast<int>(stop - text), name,
+                                                     capacity - 1);
+                    name[length > 0 ? length : 0] = L'\0';
+                }
             }
         }
     }
@@ -281,55 +292,17 @@ static HRESULT LookupNegotiatePackage(ULONG* package) {
     return status == STATUS_SUCCESS ? S_OK : E_FAIL;
 }
 
-// Tile color for each phase (0xAARRGGBB).
-static DWORD PhaseColor(LONG phase, bool blocked) {
-    if (blocked) return 0xFFFF453A;
-    switch (phase) {
-        case PH_FACE: return 0xFF0A84FF;
-        case PH_UNRECOGNIZED: return 0xFFFF9F0A;
-        case PH_MATCH: return 0xFF34C759;
-        default: return 0xFF9AA0A6;
-    }
-}
-
 // Status line for each phase.
 static const wchar_t* PhaseText(LONG phase, bool blocked) {
     if (blocked) return L"No se pudo entrar con la contraseña guardada. Usá tu PIN.";
     switch (phase) {
         case PH_OFFLINE: return L"VisionAuth no está activo. Usá tu PIN.";
-        case PH_STARTING: return L"Encendiendo la cámara...";
-        case PH_FACE: return L"Te veo... verificando";
+        case PH_STARTING: return L"Preparando la cámara";
+        case PH_FACE: return L"Verificando…";
         case PH_UNRECOGNIZED: return L"No te reconozco. Probá de nuevo o usá tu PIN.";
-        case PH_MATCH: return L"¡Hola! Entrando...";
+        case PH_MATCH: return L"¡Hola! Entrando…";
         default: return L"Mirá a la cámara";
     }
-}
-
-// A round face logo in the given color, for the sign-in option and the tile.
-static HBITMAP CreateLogoBitmap(DWORD color) {
-    const int size = 64;
-    BITMAPINFO info = {};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = size;
-    info.bmiHeader.biHeight = -size;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-    void* bits = nullptr;
-    HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bitmap || !bits) return bitmap;
-    auto* pixels = static_cast<DWORD*>(bits);
-    const double center = (size - 1) / 2.0;
-    for (int y = 0; y < size; ++y) {
-        for (int x = 0; x < size; ++x) {
-            double dx = x - center, dy = y - center, distance2 = dx * dx + dy * dy;
-            bool ring = distance2 <= 30.0 * 30.0 && distance2 >= 24.0 * 24.0;
-            bool eye = (dy + 6) * (dy + 6) + (dx - 9) * (dx - 9) <= 9 || (dy + 6) * (dy + 6) + (dx + 9) * (dx + 9) <= 9;
-            bool smile = distance2 <= 15.0 * 15.0 && distance2 >= 12.0 * 12.0 && dy > 4;
-            pixels[y * size + x] = (ring || eye || smile) ? color : 0x00000000;
-        }
-    }
-    return bitmap;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +370,7 @@ class Credential final : public ICredentialProviderCredential2 {
         if (!bitmap) return E_POINTER;
         *bitmap = nullptr;
         if (field != FI_LOGO) return E_INVALIDARG;
-        *bitmap = CreateLogoBitmap(PhaseColor(state_->phase, state_->blocked != 0));
+        *bitmap = CreateVisionAuthLogoBitmap(64);
         return *bitmap ? S_OK : E_OUTOFMEMORY;
     }
 
@@ -406,11 +379,6 @@ class Credential final : public ICredentialProviderCredential2 {
         InterlockedExchange(&state_->phase, phase);
         if (!events_) return;
         events_->SetFieldString(this, FI_STATUS, PhaseText(phase, state_->blocked != 0));
-        // Not freed: the documentation does not say whether LogonUI copies it,
-        // and a deleted handle would blank the logo. It is a few small bitmaps
-        // per lock, and LogonUI exits after each unlock.
-        HBITMAP logo = CreateLogoBitmap(PhaseColor(phase, state_->blocked != 0));
-        if (logo) events_->SetFieldBitmap(this, FI_LOGO, logo);
     }
 
     // LogonUI's window, to own the island. Null until LogonUI advises the tile.
@@ -651,7 +619,7 @@ class Provider final : public ICredentialProvider {
             } else if (state_->pending) {
                 continue;  // verified: waiting for LogonUI to log on
             } else {
-                phase = AskService();
+                phase = AskService(state_->name, 64);
                 if (phase == PH_MATCH) InterlockedExchange(&state_->pending, 1);
             }
             if (phase != shown) {
@@ -668,6 +636,7 @@ class Provider final : public ICredentialProvider {
             // Best effort: without the island the tile still shows the status
             if (island_.Create(credential_->OwnerWindow(), g_module)) island_.SetVisible(true);
         }
+        if (phase == PH_MATCH) island_.SetName(state_->name);
         island_.SetPhase(phase);
         // Give the check mark a moment on screen before logging on
         if (phase == PH_MATCH) SetTimer(window_, kLogonTimer, kMatchDelayMs, nullptr);
