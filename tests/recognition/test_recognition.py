@@ -101,7 +101,7 @@ def test_recognition_multiple_faces(mock_face_detection_class: MagicMock) -> Non
     mock_results = MagicMock()
     mock_results.detections = [
         create_mock_detection(0.1, 0.2, 0.3, 0.4, 0.8),
-        create_mock_detection(0.5, 0.6, 0.2, 0.2, 0.95),
+        create_mock_detection(0.5, 0.6, 0.15, 0.2, 0.95),
     ]
     mock_instance.process.return_value = mock_results
     mock_face_detection_class.return_value = mock_instance
@@ -131,7 +131,7 @@ def test_recognition_confidence_filtering(mock_face_detection_class: MagicMock) 
     mock_results = MagicMock()
     mock_results.detections = [
         create_mock_detection(0.1, 0.2, 0.3, 0.4, 0.55),  # Below 0.6 threshold
-        create_mock_detection(0.5, 0.6, 0.2, 0.2, 0.75),  # Above 0.6 threshold
+        create_mock_detection(0.5, 0.6, 0.15, 0.2, 0.75),  # Above 0.6 threshold
     ]
     mock_instance.process.return_value = mock_results
     mock_face_detection_class.return_value = mock_instance
@@ -150,7 +150,7 @@ def test_recognition_confidence_filtering(mock_face_detection_class: MagicMock) 
             "count": 1,
             "detections": [
                 {
-                    "bounding_box": (0.5, 0.6, 0.2, 0.2),
+                    "bounding_box": (0.5, 0.6, 0.15, 0.2),
                     "confidence": 0.75,
                 }
             ],
