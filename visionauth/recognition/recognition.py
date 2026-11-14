@@ -28,8 +28,11 @@ except (ImportError, AttributeError, ModuleNotFoundError):
     mp_face_detection = _StubSolutions()
 
 from visionauth.events.event_bus import EventBus, EventType
+from visionauth.recognition.recognition_embeddings import MODELS_DIR
 
 logger = logging.getLogger(__name__)
+
+DETECTOR_MODEL_FILE = "blaze_face_short_range.tflite"
 
 
 @dataclass(frozen=True)
@@ -95,12 +98,12 @@ class Recognition:
             import os
             from mediapipe.tasks import python
             from mediapipe.tasks.python import vision
-            
-            model_path = os.path.join("models", "blaze_face_short_range.tflite")
+
+            # Resolve against the project, not the working directory the app was launched from
+            model_path = str(MODELS_DIR / DETECTOR_MODEL_FILE)
             if not os.path.exists(model_path):
-                model_path = "blaze_face_short_range.tflite"
-                
-            if os.path.exists(model_path):
+                logger.error("Face detection model not found: %s", model_path)
+            else:
                 base_options = python.BaseOptions(model_asset_path=model_path)
                 options = vision.FaceDetectorOptions(base_options=base_options)
                 self._tasks_detector = vision.FaceDetector.create_from_options(options)
@@ -108,6 +111,12 @@ class Recognition:
                 logger.info("MediaPipe Tasks API initialized successfully using model: %s", model_path)
         except Exception as e:
             logger.warning("Could not initialize MediaPipe Tasks API: %s. Falling back to legacy/stub solutions.", e)
+
+        if not self.use_tasks_api and self.use_fallback and self._haar_cascade.empty():
+            logger.error(
+                "No face detector is available (MediaPipe model missing and Haar cascade "
+                "not shipped with this OpenCV build). No faces will ever be detected."
+            )
 
     def process_frame(
         self, frame: np.ndarray, visualize: bool = False
