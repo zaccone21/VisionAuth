@@ -52,7 +52,7 @@ models/*.pt
 models/*.pth
 
 # ── User data (never commit biometric data) ───────────────────────────────────
-data/users/
+**/data/users/
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
