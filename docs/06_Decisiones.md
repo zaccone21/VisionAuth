@@ -158,3 +158,24 @@ tras cerrar y volver a abrir la cámara con la pantalla de contraseña visible.
 - Los datos de usuario se guardan siempre en `data/` de la raíz del proyecto,
   sin importar desde dónde se ejecute (`visionauth/paths.py`).
 
+## D12. Al prender la PC, Windows inicia la sesión solo y la bloquea
+
+**Resultado.** El 2026-11-14 se probó con `scripts/boot_camera_probe.py` como
+tarea de SYSTEM al arrancar. En dos reinicios y en un arranque en frío
+(apagar y prender, tipo de arranque `0x0`), Windows inició la sesión del
+usuario sin el PIN unos 14 a 16 segundos después de arrancar y la dejó
+bloqueada. Es la opción "Usar mi información de inicio de sesión para
+terminar de configurar automáticamente" (ARSO). Con la sesión bloqueada, el
+proceso de SYSTEM recibió frames y detectó la cara.
+
+**Implica.**
+- En este equipo, el caso "prendo la PC y entro" es desbloquear una sesión
+  bloqueada. Igual hace falta el Credential Provider, que es la única forma
+  soportada de desbloquear, y la contraseña de la cuenta de Microsoft.
+- Depende de que esa opción de Windows siga activa. Si se desactiva, al
+  prender no hay sesión y el Credential Provider tendría que iniciarla.
+- La tarea programada "al iniciar" arranca unos 35 segundos después del
+  boot. Cargar Python, los modelos y la cámara lleva unos 3 segundos, así que
+  la demora es del Programador de tareas: el servicio final tiene que ser un
+  servicio de Windows de inicio automático.
+
