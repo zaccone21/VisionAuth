@@ -234,9 +234,10 @@ class Recognition:
                     logger.debug("Face rejected: in the lower frame zone (ymin=%.2f, cy=%.2f)", ymin, cy)
                     continue
 
-            # C. Aspect ratio check (~0.6 to 1.3)
+            # C. Aspect ratio check (~0.6 to 1.3), in pixels: on relative
+            # coordinates a square face on a 16:9 frame measures 0.56
             if box_h > 0.0:
-                ratio = box_w / box_h
+                ratio = (box_w * w) / (box_h * h)
                 if ratio < 0.6 or ratio > 1.3:
                     logger.debug("Face rejected: aspect ratio out of range (ratio=%.2f)", ratio)
                     continue

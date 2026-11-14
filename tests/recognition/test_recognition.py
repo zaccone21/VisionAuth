@@ -233,6 +233,27 @@ def test_recognition_aspect_ratio_filter() -> None:
         assert results[0].bounding_box[2] == 100.0 / 640.0
 
 
+def test_recognition_aspect_ratio_uses_pixels_on_widescreen_frame() -> None:
+    """A square face on a 16:9 frame is accepted.
+
+    Its relative width/height ratio is 0.56, so a ratio computed on relative
+    coordinates rejected every face from a 1280x720 camera.
+    """
+    event_bus = MagicMock(spec=EventBus)
+    with patch("visionauth.recognition.recognition.cv2.CascadeClassifier") as mock_cascade_class:
+        mock_instance = MagicMock()
+        mock_instance.detectMultiScale.return_value = [(590, 300, 265, 265)]
+        mock_cascade_class.return_value = mock_instance
+
+        recognition = Recognition(event_bus)
+        recognition.use_fallback = True
+
+        dummy_frame = np.ones((720, 1280, 3), dtype=np.uint8) * 128
+        results = recognition.process_frame(dummy_frame)
+
+        assert len(results) == 1
+
+
 def test_recognition_lower_zone_filter() -> None:
     """Tests that detections in the lower portion of the frame (neck/chest) are filtered."""
     event_bus = MagicMock(spec=EventBus)

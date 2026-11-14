@@ -77,7 +77,9 @@ def main() -> None:
     event_bus = EventBus()
     config = EnrollmentConfig(
         num_samples=8,
-        min_confidence=0.6,
+        # BlazeFace short range scores real faces around 0.5-0.7 with a backlit
+        # or low-mounted camera; 0.5 is the detector's own floor.
+        min_confidence=0.5,
         resolution=(640, 480),
         max_time_between_captures=8.0,
         data_dir="data",
@@ -92,12 +94,13 @@ def main() -> None:
         max_samples_per_pose=4,  # CENTER max 4, every other pose max 2
     )
 
+    # Recognition must not filter here: a face it drops reaches enrollment as
+    # "zero faces" and the user is told to put their face in the circle even
+    # when it already is. Enrollment runs its own position, size, confidence
+    # and stability checks, each with a message that says what to fix.
     recognition = Recognition(
         event_bus=event_bus,
         confidence_threshold=config.min_confidence,
-        min_face_size=config.min_face_size,
-        max_face_offset_y=0.65,
-        consecutive_frames_required=3,
     )
     camera = Camera(device_index=0, width=config.resolution[0], height=config.resolution[1], fps=30.0)
     service = EnrollmentService(camera=camera, recognition=recognition, event_bus=event_bus, config=config)
