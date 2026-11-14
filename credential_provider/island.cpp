@@ -31,8 +31,8 @@ Rgb PhaseAccent(LONG phase) {
     switch (phase) {
         case ISLAND_STARTING: return kWarmGray;
         case ISLAND_SEARCHING: return kCream;
-        case ISLAND_FACE: return kCoral;
-        case ISLAND_UNRECOGNIZED: return kAmber;
+        case ISLAND_FACE: return kAmber;
+        case ISLAND_UNRECOGNIZED: return kRed;
         case ISLAND_MATCH: return kGreen;
         default: return kRed;
     }
@@ -42,7 +42,7 @@ double PhaseGlow(LONG phase) {
     switch (phase) {
         case ISLAND_FACE: return 0.55;
         case ISLAND_MATCH: return 1.0;
-        case ISLAND_UNRECOGNIZED: return 0.35;
+        case ISLAND_UNRECOGNIZED: return 0.5;
         default: return 0.0;
     }
 }
@@ -107,9 +107,10 @@ void SafeRelease(T*& p) {
 D2D1_COLOR_F ColorOf(Rgb c, float alpha) { return D2D1::ColorF(c.r, c.g, c.b, alpha); }
 
 // The Face ID style glyph: four viewfinder corners and a simple face.
-// look moves the face inside the frame, mouth goes from -1 (frown) to 1 (smile).
+// look moves the face inside the frame, mouth goes from -1 (frown) to 1 (smile),
+// angry adds brows slanting down toward the nose.
 void DrawFace(ID2D1RenderTarget* target, ID2D1Factory* factory, ID2D1StrokeStyle* round, ID2D1Brush* brush,
-              float cx, float cy, float size, float lookX, float lookY, float mouth) {
+              float cx, float cy, float size, float lookX, float lookY, float mouth, bool angry = false) {
     float half = size / 2, corner = size * 0.30f, radius = size * 0.17f, stroke = size * 0.072f;
     float x0 = cx - half, y0 = cy - half, x1 = cx + half, y1 = cy + half;
 
@@ -136,6 +137,13 @@ void DrawFace(ID2D1RenderTarget* target, ID2D1Factory* factory, ID2D1StrokeStyle
             sink->BeginFigure({fx + side * size * 0.155f, fy - size * 0.155f}, D2D1_FIGURE_BEGIN_HOLLOW);
             sink->AddLine({fx + side * size * 0.155f, fy - size * 0.065f});
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+        if (angry) {
+            for (float side : {-1.0f, 1.0f}) {
+                sink->BeginFigure({fx + side * size * 0.25f, fy - size * 0.255f}, D2D1_FIGURE_BEGIN_HOLLOW);
+                sink->AddLine({fx + side * size * 0.085f, fy - size * 0.195f});
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+            }
         }
         // Nose
         sink->BeginFigure({fx + size * 0.02f, fy - size * 0.135f}, D2D1_FIGURE_BEGIN_HOLLOW);
@@ -389,64 +397,64 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     // Body: smoked glass. The sign-in screen behind it is already blurred, so
     // a translucent tint reads as frosted glass without capturing the screen.
     D2D1_ROUNDED_RECT body = D2D1::RoundedRect(pill, radius, radius);
-    brush->SetColor(D2D1::ColorF(0.075f, 0.07f, 0.065f, 0.70f * alpha));
-    target->FillRoundedRectangle(body, brush);
-    // A faint wash of the current accent, like light caught in the glass
-    brush->SetColor(ColorOf(accent, 0.06f * alpha));
-    target->FillRoundedRectangle(body, brush);
-    // Light from above: brighter top half fading out
+    // Tint: a touch lighter at the top, like a dark material lit from above
     {
-        D2D1_GRADIENT_STOP stops[3] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.13f * alpha)},
-                                       {0.5f, D2D1::ColorF(1, 1, 1, 0.025f * alpha)},
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(0.165f, 0.16f, 0.155f, 0.64f * alpha)},
+                                       {1.0f, D2D1::ColorF(0.06f, 0.058f, 0.055f, 0.74f * alpha)}};
+        ID2D1GradientStopCollection* collection = nullptr;
+        target->CreateGradientStopCollection(stops, 2, &collection);
+        ID2D1LinearGradientBrush* tint = nullptr;
+        if (collection) {
+            target->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties({0, pill.top}, {0, pill.bottom}), collection, &tint);
+        }
+        if (tint) target->FillRoundedRectangle(body, tint);
+        SafeRelease(tint);
+        SafeRelease(collection);
+    }
+    // A faint wash of the current accent, like light caught in the glass
+    brush->SetColor(ColorOf(accent, 0.05f * alpha));
+    target->FillRoundedRectangle(body, brush);
+    // Soft highlight across the top third
+    {
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.09f * alpha)},
                                        {1.0f, D2D1::ColorF(1, 1, 1, 0.0f)}};
         ID2D1GradientStopCollection* collection = nullptr;
-        target->CreateGradientStopCollection(stops, 3, &collection);
+        target->CreateGradientStopCollection(stops, 2, &collection);
         ID2D1LinearGradientBrush* sheen = nullptr;
         if (collection) {
             target->CreateLinearGradientBrush(
-                D2D1::LinearGradientBrushProperties({0, pill.top}, {0, pill.bottom}), collection, &sheen);
+                D2D1::LinearGradientBrushProperties({0, pill.top}, {0, pill.top + pillH * 0.4f}), collection,
+                &sheen);
         }
-        if (sheen) target->FillRoundedRectangle(body, sheen);
+        if (sheen) {
+            D2D1_RECT_F band = D2D1::RectF(pill.left, pill.top, pill.right, pill.top + pillH * 0.4f);
+            ID2D1RoundedRectangleGeometry* shape = nullptr;
+            factory->CreateRoundedRectangleGeometry(body, &shape);
+            ID2D1RectangleGeometry* bandShape = nullptr;
+            factory->CreateRectangleGeometry(band, &bandShape);
+            if (shape && bandShape) {
+                ID2D1PathGeometry* top = nullptr;
+                factory->CreatePathGeometry(&top);
+                ID2D1GeometrySink* sink = nullptr;
+                if (top && SUCCEEDED(top->Open(&sink))) {
+                    shape->CombineWithGeometry(bandShape, D2D1_COMBINE_MODE_INTERSECT, nullptr, sink);
+                    sink->Close();
+                    sink->Release();
+                    target->FillGeometry(top, sheen);
+                }
+                SafeRelease(top);
+            }
+            SafeRelease(bandShape);
+            SafeRelease(shape);
+        }
         SafeRelease(sheen);
         SafeRelease(collection);
     }
-    // Grain: a tiled noise texture gives the glass some material
-    {
-        static BYTE noise[64 * 64 * 4];
-        static bool noiseReady = false;
-        if (!noiseReady) {
-            unsigned seed = 0x9E3779B9u;
-            for (int i = 0; i < 64 * 64; ++i) {
-                seed = seed * 1664525u + 1013904223u;
-                BYTE v = static_cast<BYTE>(seed >> 24);
-                BYTE a = static_cast<BYTE>(v > 128 ? (v - 128) / 6 : 0);  // premultiplied white specks
-                noise[i * 4 + 0] = noise[i * 4 + 1] = noise[i * 4 + 2] = a;
-                noise[i * 4 + 3] = a;
-            }
-            noiseReady = true;
-        }
-        ID2D1Bitmap* grain = nullptr;
-        target->CreateBitmap(D2D1::SizeU(64, 64), noise, 64 * 4,
-                             D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
-                                                                      D2D1_ALPHA_MODE_PREMULTIPLIED)),
-                             &grain);
-        ID2D1BitmapBrush* grainBrush = nullptr;
-        if (grain) {
-            target->CreateBitmapBrush(grain,
-                                      D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP),
-                                      &grainBrush);
-        }
-        if (grainBrush) {
-            grainBrush->SetOpacity(0.55f * alpha);
-            target->FillRoundedRectangle(body, grainBrush);
-        }
-        SafeRelease(grainBrush);
-        SafeRelease(grain);
-    }
     // Rim: a bright hairline on top fading to a dim one at the bottom
     {
-        D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.30f * alpha)},
-                                       {1.0f, D2D1::ColorF(1, 1, 1, 0.07f * alpha)}};
+        D2D1_GRADIENT_STOP stops[2] = {{0.0f, D2D1::ColorF(1, 1, 1, 0.24f * alpha)},
+                                       {1.0f, D2D1::ColorF(1, 1, 1, 0.05f * alpha)}};
         ID2D1GradientStopCollection* collection = nullptr;
         target->CreateGradientStopCollection(stops, 2, &collection);
         ID2D1LinearGradientBrush* rim = nullptr;
@@ -488,13 +496,14 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
             case ISLAND_STARTING: faceAlphaScale = 0.55f + 0.3f * sinf(t * 3.2f); break;
             case ISLAND_SEARCHING: faceAlphaScale = 0.8f + 0.2f * sinf(t * 2.2f); break;
             case ISLAND_FACE: mouth = 1; break;
-            case ISLAND_UNRECOGNIZED: mouth = 0; break;
+            case ISLAND_UNRECOGNIZED: mouth = -0.85f; break;
             case ISLAND_MATCH: mouth = 1; break;
             default: mouth = -0.6f; break;
         }
         float size = glyph * breathe * (1 - 0.3f * successAmount);
         brush->SetColor(ColorOf(accent, faceAlpha * faceAlphaScale));
-        DrawFace(target, factory, round, brush, gx, gy, size, lookX * size, lookY * size, mouth);
+        DrawFace(target, factory, round, brush, gx, gy, size, lookX * size, lookY * size, mouth,
+                 s.phase == ISLAND_UNRECOGNIZED);
 
         if (s.phase == ISLAND_FACE) {
             // Scan line sweeping down the frame
