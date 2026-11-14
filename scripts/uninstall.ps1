@@ -30,6 +30,9 @@ if (Test-Path $InstallDir) {
 }
 Write-Host "Credential provider quitado."
 
+# Bring the clock screen back if install.ps1 -SkipLockScreen removed it
+Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" -Name "NoLockScreen" -ErrorAction SilentlyContinue
+
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
     if ($service.Status -ne "Stopped") { Stop-Service -Name $ServiceName -Force }

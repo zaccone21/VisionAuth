@@ -16,7 +16,9 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ProfileName,
-    [int]$Camera = 0
+    [int]$Camera = 0,
+    # Skip the clock screen, so locking shows the sign-in screen and its island
+    [switch]$SkipLockScreen
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,6 +88,13 @@ $providerKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\C
 New-Item -Path $providerKey -Force | Out-Null
 Set-ItemProperty -Path $providerKey -Name "(default)" -Value "VisionAuthCredentialProvider"
 Write-Host "Credential provider registrado: $installedDll"
+
+if ($SkipLockScreen) {
+    $personalization = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization"
+    New-Item -Path $personalization -Force | Out-Null
+    Set-ItemProperty -Path $personalization -Name "NoLockScreen" -Value 1 -Type DWord
+    Write-Host "Pantalla del reloj desactivada: al bloquear se ve la pantalla de inicio de sesión."
+}
 
 # 4. Password
 $check = & python $passwordScript --check

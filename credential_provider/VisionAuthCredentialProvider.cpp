@@ -29,6 +29,8 @@
 
 #include <new>
 
+#include "island.h"
+
 #ifndef STATUS_SUCCESS
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 #endif
@@ -45,6 +47,8 @@ static const wchar_t kPipeName[] = L"\\\\.\\pipe\\VisionAuth";
 static const wchar_t kSecretName[] = L"L$VisionAuthCredential";
 static const DWORD kPollIntervalMs = 200;
 static const UINT WM_VISIONAUTH_PHASE = WM_APP + 1;
+static const UINT_PTR kLogonTimer = 7;
+static const UINT kMatchDelayMs = 450;
 static const wchar_t kWindowClass[] = L"VisionAuthCredentialProviderWindow";
 
 static LONG g_dllRefs = 0;
@@ -408,6 +412,13 @@ class Credential final : public ICredentialProviderCredential2 {
         HBITMAP logo = CreateLogoBitmap(PhaseColor(phase, state_->blocked != 0));
         if (logo) events_->SetFieldBitmap(this, FI_LOGO, logo);
     }
+
+    // LogonUI's window, to own the island. Null until LogonUI advises the tile.
+    HWND OwnerWindow() {
+        HWND window = nullptr;
+        if (events_) events_->OnCreatingWindow(&window);
+        return window;
+    }
     IFACEMETHODIMP GetCheckboxValue(DWORD, BOOL*, LPWSTR*) override { return E_NOTIMPL; }
     IFACEMETHODIMP GetSubmitButtonValue(DWORD, DWORD*) override { return E_NOTIMPL; }
     IFACEMETHODIMP GetComboBoxValueCount(DWORD, DWORD*, DWORD*) override { return E_NOTIMPL; }
@@ -539,6 +550,7 @@ class Provider final : public ICredentialProvider {
     }
     IFACEMETHODIMP UnAdvise() override {
         StopPolling();
+        island_.Destroy();
         DestroyMessageWindow();
         if (events_) events_->Release();
         events_ = nullptr;
@@ -584,6 +596,7 @@ class Provider final : public ICredentialProvider {
   private:
     ~Provider() {
         StopPolling();
+        island_.Destroy();
         DestroyMessageWindow();
         if (events_) events_->Release();
         if (credential_) credential_->Release();
@@ -632,10 +645,16 @@ class Provider final : public ICredentialProvider {
         DWORD wait = 0;  // ask right away: the tile shows the real state sooner
         while (WaitForSingleObject(stop_, wait) == WAIT_TIMEOUT) {
             wait = kPollIntervalMs;
-            if (state_->pending || state_->blocked) continue;
-            Phase phase = AskService();
-            if (phase == PH_MATCH) InterlockedExchange(&state_->pending, 1);
-            if (phase != shown || phase == PH_MATCH) {
+            LONG phase;
+            if (state_->blocked) {
+                phase = ISLAND_BLOCKED;
+            } else if (state_->pending) {
+                continue;  // verified: waiting for LogonUI to log on
+            } else {
+                phase = AskService();
+                if (phase == PH_MATCH) InterlockedExchange(&state_->pending, 1);
+            }
+            if (phase != shown) {
                 shown = phase;
                 PostMessageW(window_, WM_VISIONAUTH_PHASE, static_cast<WPARAM>(phase), 0);
             }
@@ -645,13 +664,28 @@ class Provider final : public ICredentialProvider {
     // Runs on LogonUI's thread.
     void OnPhase(LONG phase) {
         if (credential_) credential_->ShowPhase(phase);
-        if (phase == PH_MATCH && events_) events_->CredentialsChanged(context_);
+        if (!island_.Created() && credential_) {
+            // Best effort: without the island the tile still shows the status
+            if (island_.Create(credential_->OwnerWindow(), g_module)) island_.SetVisible(true);
+        }
+        island_.SetPhase(phase);
+        // Give the check mark a moment on screen before logging on
+        if (phase == PH_MATCH) SetTimer(window_, kLogonTimer, kMatchDelayMs, nullptr);
+    }
+
+    void OnLogonTimer() {
+        KillTimer(window_, kLogonTimer);
+        if (events_) events_->CredentialsChanged(context_);
     }
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        auto* self = reinterpret_cast<Provider*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_VISIONAUTH_PHASE) {
-            auto* self = reinterpret_cast<Provider*>(GetWindowLongPtrW(window, GWLP_USERDATA));
             if (self) self->OnPhase(static_cast<LONG>(wparam));
+            return 0;
+        }
+        if (message == WM_TIMER && wparam == kLogonTimer) {
+            if (self) self->OnLogonTimer();
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -685,6 +719,7 @@ class Provider final : public ICredentialProvider {
     HANDLE thread_ = nullptr;
     HANDLE stop_ = nullptr;
     HWND window_ = nullptr;
+    IslandWindow island_;
 };
 
 // ---------------------------------------------------------------------------

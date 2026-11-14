@@ -229,3 +229,22 @@ pasaban de 6 a 7.5 segundos. La cámara de este equipo:
   bloqueo lo muestra con un ícono de color y un texto. La opción queda
   seleccionada por defecto, como el rostro de Windows Hello; el PIN sigue en
   "Opciones de inicio de sesión".
+
+## D15. La isla de VisionAuth en la pantalla de inicio de sesión
+
+**Decisión.** El estado se muestra en una "isla": una píldora oscura arriba al
+centro de la pantalla de inicio de sesión, con un indicador animado (gris
+buscando, azul al ver una cara, ámbar si no la reconoce, verde con un check
+al reconocerla) y el estado en letra grande. La dibuja el Credential
+Provider en una ventana propia, transparente y que no toma clics ni el foco,
+creada en el hilo de LogonUI sobre su ventana (`credential_provider/island.cpp`).
+Al reconocer al dueño espera 0.45 s antes de entrar, para que el check se vea.
+
+**Por qué.** Windows no deja que otro programa dibuje sobre la pantalla del
+reloj (solo Windows Hello lo hace), y el tile estándar no permite cambiar la
+tipografía ni animar. Por eso se desactiva la pantalla del reloj
+(`install.ps1 -SkipLockScreen`, política `NoLockScreen`, que funcionó en este
+Windows 11 Home) y la isla se dibuja sobre la de inicio de sesión.
+
+**Cómo revisarla sin bloquear:** `credential_provider/build/island_preview.exe
+salida.png` renderiza la animación cuadro por cuadro en una imagen.
