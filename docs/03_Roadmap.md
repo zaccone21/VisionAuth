@@ -18,8 +18,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 | 4 | Reconocimiento | Hecha, falta calibrar el umbral |
 | 5 | Liveness | Pasivo, sin gestos (ver D10) |
 | 6 | Event Bus | Hecha |
-| 7 | Servicio residente | No empezada |
-| 8 | Integración con Windows | No empezada |
+| 7 | Servicio residente | Hecha, falta probarla en la pantalla real |
+| 8 | Integración con Windows | Implementada, falta probarla en la pantalla real |
 | 9 | GUI | Parcial: interfaz de enrollment tipo Face ID |
 
 ## Fase 1: estructura, configuración, logging
@@ -71,11 +71,11 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 
 ## Fase 7: servicio residente
 
-- [ ] Loop de bajo consumo: la cámara se enciende solo con la sesión bloqueada
-      o ante un pedido.
-- [ ] Máquina de estados: espera, verificando, éxito o fallo, con espera entre
-      intentos y límite de reintentos.
-- [ ] Entry point de línea de comandos.
+- [x] La cámara se enciende solo con la sesión bloqueada (D13).
+- [x] Estados: espera, verificando y verificado (15 s, se entrega una sola
+      vez), con pausas tras fallos.
+- [x] Servicio de Windows: `scripts/visionauth_service.py` (`--console` para
+      correrlo en primer plano).
 
 ## Fase 8: integración con Windows
 
@@ -90,14 +90,15 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 2. [ ] Detectar bloqueo y desbloqueo de la sesión. Ya existe la consulta
        puntual (`integration/windows/session.py`); falta la notificación
        (`WTSRegisterSessionNotification`).
-3. [ ] Comunicación local entre el servicio y el Credential Provider (named pipe).
-4. [ ] Guardar la contraseña cifrada (DPAPI o secreto LSA). Windows exige la
-       contraseña real para iniciar sesión.
-5. [ ] Credential Provider mínimo en C++: tile "VisionAuth", pide la
-       verificación por el pipe y arma las credenciales para el desbloqueo.
-       **Desarrollar y probar en una máquina virtual.**
-6. [ ] Instalación como servicio, instalador y guía de desinstalación y
-       recuperación.
+3. [x] Named pipe `\\.\pipe\VisionAuth`, solo SYSTEM (D13).
+4. [x] Contraseña en un secreto LSA (`scripts/set_password.py`).
+5. [x] Credential Provider en C++ (`credential_provider/`), con arnés de
+       pruebas. No hay máquina virtual (Windows 11 Home): se prueba en el
+       equipo real, con el PIN de respaldo y la guía de recuperación del
+       README.
+6. [x] `scripts/install.ps1`, `scripts/uninstall.ps1` y guía de recuperación.
+7. [ ] Probar el desbloqueo real, con Win+L y al prender la PC.
+8. [ ] Medir y acortar el tiempo hasta que la cámara está lista al prender.
 
 ## Fase 9: GUI
 
@@ -108,6 +109,6 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 
 ## Próximos pasos
 
-1. Servicio residente (fase 7) en la sesión del usuario.
-2. Credential Provider y comunicación con el servicio.
+1. Instalar y probar el desbloqueo real.
+2. Medir y acortar el tiempo hasta que la cámara está lista al prender.
 3. Calibrar el umbral de reconocimiento.

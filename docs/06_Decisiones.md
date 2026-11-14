@@ -179,3 +179,30 @@ proceso de SYSTEM recibió frames y detectó la cara.
   la demora es del Programador de tareas: el servicio final tiene que ser un
   servicio de Windows de inicio automático.
 
+## D13. Cómo se desbloquea: servicio de Windows, pipe y Credential Provider
+
+**Decisión.**
+- Un servicio de Windows (`VisionAuth`, SYSTEM, inicio automático) corre el
+  núcleo en Python. Mientras la sesión de la consola está bloqueada, o no hay
+  nadie con sesión iniciada, mantiene la cámara abierta e intenta autenticar
+  al dueño. Con la sesión desbloqueada la cámara queda cerrada. El servicio
+  habla con el SCM por `ctypes`, sin `pywin32`.
+- Una verificación exitosa dura 15 segundos y se entrega una sola vez por el
+  named pipe `\\.\pipe\VisionAuth`, que solo puede abrir SYSTEM.
+- El Credential Provider (C++, `credential_provider/`) consulta el pipe cada
+  300 ms desde LogonUI y solo acepta la respuesta si el servidor del pipe
+  corre como SYSTEM. Con `MATCH`, le pide a LogonUI entrar solo y arma las
+  credenciales con la contraseña guardada en el secreto LSA
+  `L$VisionAuthCredential` (`scripts/set_password.py`).
+- Si Windows rechaza la contraseña guardada, no vuelve a intentar hasta el
+  próximo bloqueo, para no repetir inicios de sesión fallidos.
+- Se compila con MinGW-w64 (WinLibs, sin Visual Studio), con la biblioteca
+  estándar enlazada estáticamente.
+
+**Implica (seguridad mínima, a pedido del dueño):**
+- Cualquier administrador del equipo puede leer la contraseña guardada.
+- El servicio ejecuta como SYSTEM el código del proyecto y las librerías de
+  Python del usuario, que el usuario puede modificar. En un equipo de un solo
+  usuario administrador no agrega un riesgo real.
+- Una foto o un video del dueño probablemente desbloquea (D10).
+

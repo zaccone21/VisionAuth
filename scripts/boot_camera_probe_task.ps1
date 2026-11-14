@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Installs, runs or removes the SYSTEM scheduled task for boot_camera_probe.py.
 
