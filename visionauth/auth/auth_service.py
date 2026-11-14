@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import logging
 from visionauth.camera.camera import Camera
+from visionauth.events.event_bus import EventBus, EventType
 from visionauth.recognition.recognition import Recognition
 from visionauth.enrollment.embedder import RealFaceEmbedder
 from visionauth.persistence.persistence import UserPersistence
@@ -42,6 +43,7 @@ class AuthService:
         liveness_detector: LivenessDetector | None = None,
         auth_threshold: float = DEFAULT_MATCH_THRESHOLD,
         max_auth_time: float = 5.0,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.camera = camera
         self.recognition = recognition
@@ -50,9 +52,13 @@ class AuthService:
         self.liveness_detector = liveness_detector or LivenessDetector()
         self.auth_threshold = auth_threshold
         self.max_auth_time = max_auth_time
+        self.event_bus = event_bus
 
     def authenticate(self, username: str, visualize: bool = False) -> AuthResult:
         """Processes live frame inputs to authenticate a user.
+
+        On success publishes FACE_RECOGNIZED, AUTH_SUCCESS and UNLOCK_REQUESTED,
+        in that order; on failure publishes AUTH_FAILED with the reason.
 
         Args:
             username: The registered username.
@@ -61,6 +67,24 @@ class AuthService:
         Returns:
             AuthResult instance containing status, reason, confidence, and username.
         """
+        result = self._authenticate(username, visualize)
+        self._publish(username, result)
+        return result
+
+    def _publish(self, username: str, result: AuthResult) -> None:
+        """Publishes the outcome of an authentication attempt on the EventBus."""
+        if self.event_bus is None:
+            return
+        if result.success:
+            # A separate payload per event, so a handler that edits one cannot change the next
+            self.event_bus.emit(EventType.FACE_RECOGNIZED, {"user": result.user, "confidence": result.confidence})
+            self.event_bus.emit(EventType.AUTH_SUCCESS, {"user": result.user, "confidence": result.confidence})
+            self.event_bus.emit(EventType.UNLOCK_REQUESTED, {"user": result.user})
+        else:
+            self.event_bus.emit(EventType.AUTH_FAILED, {"user": username, "reason": result.reason})
+
+    def _authenticate(self, username: str, visualize: bool) -> AuthResult:
+        """Runs the authentication pipeline without publishing events."""
         # 1. Load user profile and biometric centroid
         profile = self.persistence.load_user_profile(username)
         if profile is None:

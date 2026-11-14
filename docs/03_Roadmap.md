@@ -17,7 +17,7 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 | 3 | Enrollment | Hecha, falta calibrar en el setup real |
 | 4 | Reconocimiento | Hecha, falta calibrar el umbral |
 | 5 | Liveness | Débil: no frena una foto |
-| 6 | Event Bus | Hecha, pero la autenticación no publica eventos |
+| 6 | Event Bus | Hecha |
 | 7 | Servicio residente | No empezada |
 | 8 | Integración con Windows | No empezada |
 | 9 | GUI | Parcial: interfaz de enrollment tipo Face ID |
@@ -40,6 +40,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 - [x] Poses reales de la cabeza (yaw/pitch desde los puntos de la cara).
 - [x] Agregar muestras a un usuario existente (`append`).
 - [x] Interfaz tipo Face ID (`visionauth/ui`).
+- [x] Detectar caras con cámaras 16:9 (la proporción de la cara se mide en
+      píxeles; antes se descartaban todas).
 - [ ] Verificar en Windows que el anillo se ilumine del lado correcto.
 - [ ] Calibrar los umbrales de pose (`pose_yaw_threshold`,
       `pose_pitch_threshold`, `NEUTRAL_PITCH_RATIO`) con los ángulos que guarda
@@ -65,8 +67,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 ## Fase 6: Event Bus
 
 - [x] Bus sincrónico y thread-safe.
-- [ ] Que `AuthService` publique `FACE_RECOGNIZED`, `AUTH_SUCCESS`,
-      `AUTH_FAILED` y `UNLOCK_REQUESTED`.
+- [x] Que `AuthService` publique `FACE_RECOGNIZED`, `AUTH_SUCCESS`,
+      `AUTH_FAILED` y `UNLOCK_REQUESTED` (si recibe un `event_bus`).
 
 ## Fase 7: servicio residente
 
