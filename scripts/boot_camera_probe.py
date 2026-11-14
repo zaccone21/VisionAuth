@@ -46,7 +46,7 @@ def main() -> None:
 
         import cv2
 
-        from integration.windows.session import console_session_id, session_user
+        from integration.windows.session import console_session_id, session_locked, session_user
         from visionauth.events.event_bus import EventBus
         from visionauth.recognition.recognition import Recognition
     except Exception as e:
@@ -62,6 +62,7 @@ def main() -> None:
     while time.monotonic() - start < args.seconds:
         console = console_session_id()
         user = session_user(console)
+        locked = session_locked(console) if user else None
 
         if camera is None or not camera.isOpened():
             camera = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
@@ -73,7 +74,7 @@ def main() -> None:
         ok = ok and frame is not None
         faces = len(recognition.process_frame(frame)) if ok else 0
         brightness = f"{frame.mean():.0f}" if ok else "-"
-        log(f"console_session={console} signed_in={user or '-'} opened={opened} frame={ok} brightness={brightness} faces={faces}")
+        log(f"console_session={console} signed_in={user or '-'} locked={locked} opened={opened} frame={ok} brightness={brightness} faces={faces}")
 
         if user is None:
             stats["before_signin"] += 1

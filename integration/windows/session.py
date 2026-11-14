@@ -9,8 +9,8 @@ WTS_SESSION_INFO_EX = 25
 WTS_SESSIONSTATE_LOCK = 0
 
 
-def session_locked() -> bool | None:
-    """Whether the current Windows session is locked.
+def session_locked(session_id: int = WTS_CURRENT_SESSION) -> bool | None:
+    """Whether a Windows session is locked (by default, the caller's own session).
 
     Unlike checking the input desktop, this is True from the moment the lock
     screen appears, not only once the password prompt is shown.
@@ -22,7 +22,7 @@ def session_locked() -> bool | None:
     buffer = ctypes.POINTER(wintypes.DWORD)()
     size = wintypes.DWORD()
     if not wtsapi32.WTSQuerySessionInformationW(
-        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSION_INFO_EX, ctypes.byref(buffer), ctypes.byref(size)
+        WTS_CURRENT_SERVER_HANDLE, session_id, WTS_SESSION_INFO_EX, ctypes.byref(buffer), ctypes.byref(size)
     ):
         return None
     try:
