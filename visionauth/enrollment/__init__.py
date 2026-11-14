@@ -10,6 +10,7 @@ from visionauth.enrollment.enrollment import (
     EnrollmentTimeoutError,
     InvalidUserError,
     UserAlreadyExistsError,
+    UserNotFoundError,
 )
 from visionauth.enrollment.stability import FaceStabilityTracker
 
@@ -18,6 +19,7 @@ __all__ = [
     "EnrollmentError",
     "InvalidUserError",
     "UserAlreadyExistsError",
+    "UserNotFoundError",
     "EnrollmentTimeoutError",
     "FaceEmbedder",
     "DummyFaceEmbedder",

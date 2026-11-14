@@ -12,7 +12,6 @@ from visionauth.persistence.persistence import UserPersistence
 from visionauth.liveness.liveness_detector import LivenessDetector
 from visionauth.recognition.recognition_embeddings import (
     DEFAULT_MATCH_THRESHOLD,
-    cosine_similarity,
     crop_face,
     is_profile_compatible,
 )
@@ -72,23 +71,17 @@ class AuthService:
             logger.error("User profile created with an incompatible embedding model. Please enroll again.")
             return AuthResult(success=False, reason="incompatible_profile", confidence=0.0, user=None)
 
-        centroid = profile.get("centroid")
-        if centroid is None:
-            embeddings = profile.get("embeddings", [])
-            if not embeddings:
-                logger.error("Authentication failed: no embeddings found in profile for '%s'.", username)
-                return AuthResult(success=False, reason="invalid_profile_data", confidence=0.0, user=None)
-            emb_array = np.array(embeddings, dtype=np.float32)
-            centroid_arr = np.mean(emb_array, axis=0)
-            norm = np.linalg.norm(centroid_arr)
-            if norm > 0.0:
-                centroid_arr = centroid_arr / norm
-            logger.info("Loaded user embedding: OK (computed centroid on-the-fly from %d embeddings)", len(embeddings))
+        # Match against every enrolled sample rather than their average, so a face
+        # seen from the side is compared with the samples taken from that side
+        embeddings = profile.get("embeddings") or []
+        if embeddings:
+            references = np.array(embeddings, dtype=np.float32)
+        elif profile.get("centroid") is not None:
+            references = np.array([profile["centroid"]], dtype=np.float32)
         else:
-            centroid_arr = np.array(centroid, dtype=np.float32)
-            logger.info("Loaded user embedding: OK")
-
-        logger.info("Embedding norm: %.4f", float(np.linalg.norm(centroid_arr)))
+            logger.error("Authentication failed: no embeddings found in profile for '%s'.", username)
+            return AuthResult(success=False, reason="invalid_profile_data", confidence=0.0, user=None)
+        logger.info("Loaded %d reference embedding(s) for '%s'", len(references), username)
 
         # 2. Start camera
         camera_started_by_us = False
@@ -153,7 +146,7 @@ class AuthService:
 
                         # Evaluate biometric match only if live
                         if liveness_res.is_live:
-                            sim = cosine_similarity(emb, centroid_arr)
+                            sim = float(np.max(references @ emb))
                             logger.info("Similarity score: %.4f (threshold: %.2f)", sim, self.auth_threshold)
                             if sim >= self.auth_threshold:
                                 logger.info("MATCH decision: User '%s' authenticated successfully. Similarity: %.4f", username, sim)

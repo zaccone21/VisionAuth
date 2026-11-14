@@ -18,7 +18,8 @@ from visionauth.enrollment.embedder import DummyFaceEmbedder, FaceEmbedder, Real
 from visionauth.enrollment.stability import FaceStabilityTracker
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.recognition.recognition import DetectionResult, Recognition
-from visionauth.recognition.recognition_embeddings import EMBEDDING_DIMENSION
+from visionauth.recognition.head_pose import HeadPose, classify_pose, estimate_head_pose
+from visionauth.recognition.recognition_embeddings import EMBEDDING_DIMENSION, is_profile_compatible
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,12 @@ class InvalidUserError(EnrollmentError, ValueError):
 
 class UserAlreadyExistsError(EnrollmentError):
     """Raised when attempting to enroll a user who is already registered."""
+
+    pass
+
+
+class UserNotFoundError(EnrollmentError):
+    """Raised when adding samples to a user who is not enrolled."""
 
     pass
 
@@ -107,6 +114,7 @@ class EnrollmentService:
         username: str,
         on_frame: Callable[[Any, list[DetectionResult]], None] | None = None,
         visualize: bool = False,
+        append: bool = False,
     ) -> dict[str, Any]:
         """Registers a new user by capturing valid face samples from the camera.
 
@@ -115,13 +123,16 @@ class EnrollmentService:
             on_frame: Optional callback invoked after each frame is processed,
                 receiving (frame, detections).
             visualize: If True, displays a real-time visual preview of detections.
+            append: If True, adds the new samples to an existing user instead of
+                creating one, e.g. to enroll again from the final camera position.
 
         Returns:
             The created user metadata dictionary.
 
         Raises:
             InvalidUserError: If the username fails validation.
-            UserAlreadyExistsError: If the user is already enrolled.
+            UserAlreadyExistsError: If the user is already enrolled and append is False.
+            UserNotFoundError: If append is True and the user is not enrolled.
             EnrollmentTimeoutError: If the timeout between captures is exceeded.
             CameraError: If the camera cannot start or fails to return frames.
             EnrollmentError: For any other enrollment execution failures.
@@ -130,7 +141,17 @@ class EnrollmentService:
         self._validate_username(username)
         username = username.strip()
 
-        if self.persistence.user_exists(username):
+        if append:
+            profile = self.persistence.load_user_profile(username)
+            if profile is None:
+                logger.error("Cannot add samples: user '%s' is not enrolled.", username)
+                raise UserNotFoundError(f"User '{username}' is not enrolled.")
+            if not is_profile_compatible(profile):
+                raise EnrollmentError(
+                    f"User '{username}' was enrolled with an incompatible embedding model. "
+                    "Enroll again from scratch."
+                )
+        elif self.persistence.user_exists(username):
             logger.error("User '%s' is already registered.", username)
             raise UserAlreadyExistsError(f"User '{username}' is already registered.")
 
@@ -144,6 +165,8 @@ class EnrollmentService:
 
         samples: list[Any] = []
         embeddings: list[list[float]] = []
+        sample_poses: list[dict[str, Any]] = []
+        last_head_pose: HeadPose | None = None
         last_capture_time = time.time()
         last_processed_time = 0.0
         last_bbox_center: tuple[float, float] | None = None
@@ -279,8 +302,16 @@ class EnrollmentService:
                                 else:
                                     sharp = False
                             
-                            # Classify pose
-                            if cx < 0.43:
+                            # Classify pose from head rotation when landmarks exist,
+                            # otherwise from the face position in the frame
+                            head_pose = estimate_head_pose(detection.keypoints)
+                            if head_pose is not None:
+                                pose = classify_pose(
+                                    head_pose,
+                                    yaw_threshold=self.config.pose_yaw_threshold,
+                                    pitch_threshold=self.config.pose_pitch_threshold,
+                                )
+                            elif cx < 0.43:
                                 pose = "LEFT"
                             elif cx > 0.57:
                                 pose = "RIGHT"
@@ -383,7 +414,27 @@ class EnrollmentService:
                                     if pose_ok:
                                         # F. Face movement (sample diversity) check
                                         movement_ok = True
-                                        if last_bbox_center is not None and self.config.min_face_movement > 0.0:
+                                        if head_pose is not None and last_head_pose is not None:
+                                            pose_change = (
+                                                (head_pose.yaw - last_head_pose.yaw) ** 2
+                                                + (head_pose.pitch - last_head_pose.pitch) ** 2
+                                            ) ** 0.5
+                                            if pose_change < self.config.min_pose_change:
+                                                movement_ok = False
+                                                logger.info(
+                                                    "Sample rejected: duplicate (insufficient head rotation: %.3f < %.3f).",
+                                                    pose_change,
+                                                    self.config.min_pose_change,
+                                                )
+                                                last_capture_time = now
+                                                self.event_bus.emit(
+                                                    "ENROLLMENT_FRAME_DISCARDED",
+                                                    {
+                                                        "reason": "insufficient_movement",
+                                                        "current_samples": len(samples),
+                                                    },
+                                                )
+                                        elif last_bbox_center is not None and self.config.min_face_movement > 0.0:
                                             prev_cx, prev_cy = last_bbox_center
                                             dist = ((cx - prev_cx) ** 2 + (cy - prev_cy) ** 2) ** 0.5
                                             if dist < self.config.min_face_movement:
@@ -447,7 +498,15 @@ class EnrollmentService:
                         # Update pose variables
                         pose_counts[pose] += 1
                         last_accepted_pose = pose
-                        
+                        last_head_pose = head_pose
+                        sample_poses.append(
+                            {
+                                "label": pose,
+                                "yaw": head_pose.yaw if head_pose is not None else None,
+                                "pitch": head_pose.pitch if head_pose is not None else None,
+                            }
+                        )
+
                         logger.info("Sample accepted: frontal/stable/sharp (Sample %d of %d, Pose: %s)", len(samples), self.config.num_samples, pose)
                         self.event_bus.emit(
                             "ENROLLMENT_FRAME_ACCEPTED",
@@ -465,32 +524,32 @@ class EnrollmentService:
                     frames_skipped += 1
 
                 # --- 2. ALWAYS RENDER (Every Frame at 30 FPS) ---
-                # Draw performance overlay metrics (visual FPS, inference FPS, inference processing ms, skips)
-                import cv2
-                h, w, _ = frame.shape
-                elapsed_total = time.time() - start_run_time
-                fps_visual = frames_captured / max(0.001, elapsed_total)
-                fps_inference = frames_processed / max(0.001, elapsed_total)
-                avg_inf_ms = (sum_inference_time / max(1, frames_processed)) * 1000.0
-
-                metrics_text = f"Visual FPS: {fps_visual:.1f} | Inf FPS: {fps_inference:.1f} | Avg Inf: {avg_inf_ms:.1f}ms | Skipped: {frames_skipped}"
-                cv2.putText(
-                    frame,
-                    metrics_text,
-                    (15, h - 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (255, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
-
                 # Call optional frame callback with new or cached detections
                 if on_frame is not None:
                     on_frame(frame, detections)
 
                 # Show visual debug window directly inside enrollment if visualize=True
                 if visualize:
+                    import cv2
+                    h, w, _ = frame.shape
+
+                    # Draw performance overlay metrics (visual FPS, inference FPS, inference processing ms, skips)
+                    elapsed_total = time.time() - start_run_time
+                    fps_visual = frames_captured / max(0.001, elapsed_total)
+                    fps_inference = frames_processed / max(0.001, elapsed_total)
+                    avg_inf_ms = (sum_inference_time / max(1, frames_processed)) * 1000.0
+                    metrics_text = f"Visual FPS: {fps_visual:.1f} | Inf FPS: {fps_inference:.1f} | Avg Inf: {avg_inf_ms:.1f}ms | Skipped: {frames_skipped}"
+                    cv2.putText(
+                        frame,
+                        metrics_text,
+                        (15, h - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (255, 255, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
+
                     # Draw rectangles using cached or new detections
                     for d in detections:
                         xmin, ymin, width, height = d.bounding_box
@@ -541,45 +600,36 @@ class EnrollmentService:
                     f"Camera stream closed prematurely. Captured {len(samples)}/{self.config.num_samples}."
                 )
 
-            # Quality Audit and Outlier Filtering (Requisito 7)
+            # Quality audit: drop samples that do not look like the same person.
+            # The cutoff is absolute rather than relative to the spread, so side
+            # poses, which are naturally further from the centroid, are kept.
             emb_arrays = [np.array(e, dtype=np.float32) for e in embeddings]
-            initial_centroid = np.mean(emb_arrays, axis=0)
-            initial_centroid_norm = np.linalg.norm(initial_centroid)
-            if initial_centroid_norm > 0.0:
-                initial_centroid = initial_centroid / initial_centroid_norm
-                
-            sims = [float(np.dot(emb, initial_centroid)) for emb in emb_arrays]
+            centroid = np.mean(emb_arrays, axis=0)
+            centroid_norm = np.linalg.norm(centroid)
+            if centroid_norm > 0.0:
+                centroid = centroid / centroid_norm
+
+            sims = [float(np.dot(emb, centroid)) for emb in emb_arrays]
+            logger.info("Sample similarity to centroid: %s", ", ".join(f"{sim:.2f}" for sim in sims))
+
+            kept = [idx for idx, sim in enumerate(sims) if sim >= self.config.min_sample_similarity]
             for idx, sim in enumerate(sims):
-                print(f"Embedding {idx+1} -> centroid: {sim:.2f}")
-                
-            avg_sim = float(np.mean(sims))
-            min_sim = float(np.min(sims))
-            max_sim = float(np.max(sims))
-            std_sim = float(np.std(sims))
-            
-            print(f"Average similarity: {avg_sim:.2f}")
-            print(f"Minimum: {min_sim:.2f}")
-            print(f"Maximum: {max_sim:.2f}")
-            print(f"Standard deviation: {std_sim:.2f}")
-            
-            # Filter out outliers (more than 1.5 std below average)
-            filtered_embeddings = []
-            cutoff = avg_sim - 1.5 * std_sim if std_sim > 0.01 else -1.0
-            
-            for idx, (emb, sim) in enumerate(zip(embeddings, sims)):
-                if cutoff > 0 and sim < cutoff:
-                    logger.info("Discarding embedding %d (similarity %.2f below outlier threshold %.2f)", idx+1, sim, cutoff)
-                else:
-                    filtered_embeddings.append(emb)
-            
-            # Recompute final centroid from remaining embeddings
-            final_emb_arrays = [np.array(e, dtype=np.float32) for e in filtered_embeddings]
-            final_centroid = np.mean(final_emb_arrays, axis=0)
-            final_centroid_norm = np.linalg.norm(final_centroid)
-            if final_centroid_norm > 0.0:
-                final_centroid = final_centroid / final_centroid_norm
-                
-            # Self-Similarity Validation (Requisito 6)
+                if idx not in kept:
+                    logger.info(
+                        "Discarding embedding %d (similarity %.2f below %.2f)",
+                        idx + 1,
+                        sim,
+                        self.config.min_sample_similarity,
+                    )
+            if not kept:
+                self.event_bus.emit("ENROLLMENT_FAILED", {"reason": "inconsistent_samples"})
+                raise EnrollmentError("Enrollment failed: captured samples are not consistent with each other.")
+
+            filtered_embeddings = [embeddings[idx] for idx in kept]
+            filtered_poses = [sample_poses[idx] for idx in kept] if len(sample_poses) == len(embeddings) else None
+
+            # Self-Similarity Validation (Requisito 6): re-embedding the last frame
+            # must match one of the kept samples, which guards against an unstable embedder
             last_frame = samples[-1]
             if last_bounding_box is not None:
                 from visionauth.recognition.recognition_embeddings import crop_face
@@ -590,21 +640,24 @@ class EnrollmentService:
                     last_emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
             else:
                 last_emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
-                
-            self_sim = float(np.dot(last_emb, final_centroid))
-            print(f"Enrollment self similarity:\n{self_sim:.2f}")
-            
+
+            self_sim = max(float(np.dot(last_emb, np.array(e, dtype=np.float32))) for e in filtered_embeddings)
+            logger.info("Enrollment self similarity: %.2f", self_sim)
+
             if self_sim < 0.85:
                 logger.error("Enrollment failed: self similarity %.2f below threshold 0.85.", self_sim)
                 self.event_bus.emit("ENROLLMENT_FAILED", {"reason": "low_self_similarity"})
                 raise EnrollmentError(f"Enrollment failed due to low self-similarity ({self_sim:.2f} < 0.85).")
 
-            # Update embeddings list with filtered embeddings before save
-            embeddings = filtered_embeddings
-
             # Persist data
             try:
-                metadata = self.persistence.save_user(username, samples, embeddings=embeddings)
+                metadata = self.persistence.save_user(
+                    username,
+                    samples,
+                    embeddings=filtered_embeddings,
+                    poses=filtered_poses,
+                    append=append,
+                )
             except IOError as e:
                 logger.error("Persistence write error during enrollment: %s", e)
                 self.event_bus.emit("ENROLLMENT_FAILED", {"reason": "persistence_error"})

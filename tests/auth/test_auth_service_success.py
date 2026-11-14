@@ -72,3 +72,53 @@ def test_auth_service_success() -> None:
     assert res.reason == "success"
     assert res.user == "test_user"
     assert res.confidence > 0.8
+
+
+def test_auth_matches_closest_enrolled_pose() -> None:
+    """A face seen from the side matches the side sample even if it is far from the centroid."""
+    mock_camera = MagicMock(spec=Camera)
+    mock_camera.is_running = False
+    mock_camera.frames.return_value = [np.ones((480, 640, 3), dtype=np.uint8)] * 11
+
+    mock_recognition = MagicMock(spec=Recognition)
+    mock_recognition.process_frame.side_effect = [
+        [DetectionResult(bounding_box=(0.35 + 0.002 * (i % 3 - 1), 0.35, 0.3, 0.3), confidence=0.9)]
+        for i in range(11)
+    ]
+
+    frontal = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
+    frontal[0] = 1.0
+    side = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
+    side[1] = 1.0
+    centroid = (frontal + side) / np.linalg.norm(frontal + side)
+    mock_persistence = MagicMock(spec=UserPersistence)
+    mock_persistence.load_user_profile.return_value = {
+        "user": "test_user",
+        "embeddings": [frontal.tolist(), side.tolist()],
+        "centroid": centroid.tolist(),
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION,
+        "embedding_version": EMBEDDING_VERSION,
+    }
+
+    # Live embeddings close to the side sample: ~0.7 to the centroid, ~0.98 to the side sample
+    rng = np.random.default_rng(7)
+    live = []
+    for _ in range(11):
+        emb = side + rng.normal(0.0, 0.02, EMBEDDING_DIMENSION).astype(np.float32)
+        live.append(emb / np.linalg.norm(emb))
+    mock_embedder = MagicMock(spec=RealFaceEmbedder)
+    mock_embedder.generate_embedding.side_effect = live
+
+    service = AuthService(
+        camera=mock_camera,
+        recognition=mock_recognition,
+        persistence=mock_persistence,
+        embedder=mock_embedder,
+        auth_threshold=0.8,
+        max_auth_time=2.0,
+    )
+
+    res = service.authenticate("test_user")
+    assert res.success is True
+    assert res.confidence > 0.9

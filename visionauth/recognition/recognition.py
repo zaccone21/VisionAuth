@@ -42,10 +42,14 @@ class DetectionResult:
     Attributes:
         bounding_box: Bounding box relative coordinates (xmin, ymin, width, height).
         confidence: Confidence score of the detection.
+        keypoints: Relative (x, y) facial landmarks in MediaPipe order (right eye,
+            left eye, nose tip, mouth center, right ear, left ear), or None when
+            the detector does not provide them.
     """
 
     bounding_box: tuple[float, float, float, float]
     confidence: float
+    keypoints: tuple[tuple[float, float], ...] | None = None
 
 
 class Recognition:
@@ -158,8 +162,13 @@ class Recognition:
                         ymin = float(bbox.origin_y) / h
                         box_width = float(bbox.width) / w
                         box_height = float(bbox.height) / h
+                        keypoints = tuple((float(k.x), float(k.y)) for k in detection.keypoints or [])
                         raw_detections.append(
-                            DetectionResult(bounding_box=(xmin, ymin, box_width, box_height), confidence=confidence)
+                            DetectionResult(
+                                bounding_box=(xmin, ymin, box_width, box_height),
+                                confidence=confidence,
+                                keypoints=keypoints or None,
+                            )
                         )
             except Exception as e:
                 logger.error("MediaPipe Tasks API execution failed: %s", e)

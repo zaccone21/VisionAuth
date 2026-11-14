@@ -6,6 +6,8 @@ like Enrollment and Camera.
 
 from dataclasses import dataclass
 
+from visionauth.recognition.head_pose import DEFAULT_PITCH_THRESHOLD, DEFAULT_YAW_THRESHOLD
+
 
 @dataclass
 class EnrollmentConfig:
@@ -17,6 +19,14 @@ class EnrollmentConfig:
         resolution: Camera target resolution as a (width, height) tuple.
         max_time_between_captures: Max seconds allowed between successive valid captures.
         data_dir: Base directory path for storing user data.
+        min_face_movement: Min bbox center shift between captures, used when the
+            detector provides no landmarks.
+        min_pose_change: Min head rotation (yaw/pitch distance) between captures,
+            used instead of min_face_movement when landmarks are available.
+        pose_yaw_threshold: Yaw beyond which a sample counts as LEFT or RIGHT.
+        pose_pitch_threshold: Pitch beyond which a sample counts as UP or DOWN.
+        min_sample_similarity: Samples less similar than this to the centroid
+            are discarded as not belonging to the same person.
     """
 
     num_samples: int = 8
@@ -34,3 +44,7 @@ class EnrollmentConfig:
     max_face_offset: float = 1.0
     min_blur_threshold: float = 0.0
     max_samples_per_pose: int = 0
+    min_pose_change: float = 0.0
+    pose_yaw_threshold: float = DEFAULT_YAW_THRESHOLD
+    pose_pitch_threshold: float = DEFAULT_PITCH_THRESHOLD
+    min_sample_similarity: float = 0.4

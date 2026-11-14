@@ -16,6 +16,7 @@ from visionauth.enrollment.enrollment import (
     EnrollmentTimeoutError,
     InvalidUserError,
     UserAlreadyExistsError,
+    UserNotFoundError,
 )
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.recognition.recognition_embeddings import EMBEDDING_DIMENSION
@@ -805,3 +806,121 @@ def test_enrollment_self_similarity_fail(tmp_path: pytest.TempPathFactory) -> No
 
 
 
+
+
+def make_pose_detection(yaw: float) -> DetectionResult:
+    """A centered detection whose landmarks encode the given head yaw."""
+    keypoints = ((0.45, 0.4), (0.55, 0.4), (0.5 + yaw * 0.1, 0.51), (0.5, 0.6), (0.38, 0.45), (0.62, 0.45))
+    return DetectionResult(bounding_box=(0.35, 0.35, 0.3, 0.3), confidence=0.9, keypoints=keypoints)
+
+
+def test_enrollment_uses_head_rotation_when_landmarks_exist(tmp_path: pytest.TempPathFactory) -> None:
+    """Poses come from head yaw, and turning the head counts as movement even if the bbox stays put."""
+    data_dir = str(tmp_path)
+    config = EnrollmentConfig(
+        num_samples=2,
+        data_dir=data_dir,
+        stability_window_size=1,
+        stability_consecutive_threshold=1,
+        min_face_movement=0.015,  # identical bboxes would fail this check
+        min_pose_change=0.1,
+    )
+
+    mock_camera = MagicMock(spec=Camera)
+    mock_camera.is_running = False
+    mock_camera.frames.return_value = [np.ones((480, 640, 3), dtype=np.uint8) * 128] * 3
+
+    mock_recognition = MagicMock(spec=Recognition)
+    mock_recognition.process_frame.side_effect = [
+        [make_pose_detection(0.0)],  # accepted: CENTER
+        [make_pose_detection(0.02)],  # rejected: head barely moved
+        [make_pose_detection(0.3)],  # accepted: LEFT
+    ]
+
+    event_bus = MagicMock(spec=EventBus)
+    service = EnrollmentService(
+        camera=mock_camera, recognition=mock_recognition, event_bus=event_bus, config=config
+    )
+
+    service.enroll("pose_user")
+
+    event_bus.emit.assert_any_call(
+        "ENROLLMENT_FRAME_DISCARDED", {"reason": "insufficient_movement", "current_samples": 1}
+    )
+    event_bus.emit.assert_any_call(
+        "ENROLLMENT_FRAME_ACCEPTED", {"sample_index": 2, "total_needed": 2, "pose": "LEFT"}
+    )
+    profile = UserPersistence(data_dir=data_dir).load_user_profile("pose_user")
+    assert [p["label"] for p in profile["poses"]] == ["CENTER", "LEFT"]
+    assert profile["poses"][1]["yaw"] == pytest.approx(0.3)
+
+
+def test_enrollment_keeps_side_pose_samples(tmp_path: pytest.TempPathFactory) -> None:
+    """A side-pose sample further from the centroid is kept as long as it is the same person."""
+    data_dir = str(tmp_path)
+    config = EnrollmentConfig(num_samples=4, data_dir=data_dir, stability_window_size=1, stability_consecutive_threshold=1)
+
+    mock_camera = MagicMock(spec=Camera)
+    mock_camera.is_running = False
+    mock_camera.frames.return_value = [np.ones((480, 640, 3), dtype=np.uint8) * 128] * 4
+    mock_recognition = MagicMock(spec=Recognition)
+    mock_recognition.process_frame.return_value = [create_detection(0.9)]
+
+    frontal = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
+    frontal[0] = 1.0
+    side = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
+    side[0], side[1] = 0.6, 0.8  # similarity 0.6 to frontal
+    mock_embedder = MagicMock()
+    # Three frontal samples, one side sample, then the re-embedding of the last frame
+    mock_embedder.generate_embedding.side_effect = [frontal, frontal, frontal, side, side]
+
+    service = EnrollmentService(
+        camera=mock_camera,
+        recognition=mock_recognition,
+        event_bus=MagicMock(spec=EventBus),
+        config=config,
+        embedder=mock_embedder,
+    )
+
+    service.enroll("side_user")
+
+    profile = UserPersistence(data_dir=data_dir).load_user_profile("side_user")
+    assert len(profile["embeddings"]) == 4
+
+
+def test_enrollment_append_requires_existing_user(tmp_path: pytest.TempPathFactory) -> None:
+    config = EnrollmentConfig(num_samples=1, data_dir=str(tmp_path))
+    service = EnrollmentService(
+        camera=MagicMock(spec=Camera),
+        recognition=MagicMock(spec=Recognition),
+        event_bus=MagicMock(spec=EventBus),
+        config=config,
+        embedder=MagicMock(),
+    )
+
+    with pytest.raises(UserNotFoundError):
+        service.enroll("ghost", append=True)
+
+
+def test_enrollment_append_adds_to_existing_profile(tmp_path: pytest.TempPathFactory) -> None:
+    data_dir = str(tmp_path)
+    config = EnrollmentConfig(num_samples=2, data_dir=data_dir, stability_window_size=1, stability_consecutive_threshold=1)
+
+    def run(append: bool) -> dict:
+        mock_camera = MagicMock(spec=Camera)
+        mock_camera.is_running = False
+        mock_camera.frames.return_value = [np.ones((480, 640, 3), dtype=np.uint8) * 128] * 2
+        mock_recognition = MagicMock(spec=Recognition)
+        mock_recognition.process_frame.return_value = [create_detection(0.9)]
+        service = EnrollmentService(
+            camera=mock_camera, recognition=mock_recognition, event_bus=MagicMock(spec=EventBus), config=config
+        )
+        return service.enroll("repeat_user", append=append)
+
+    run(append=False)
+    with pytest.raises(UserAlreadyExistsError):
+        run(append=False)
+    metadata = run(append=True)
+
+    assert metadata["sample_count"] == 4
+    assert len(UserPersistence(data_dir=data_dir).load_user_profile("repeat_user")["embeddings"]) == 4
