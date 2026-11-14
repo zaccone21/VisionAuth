@@ -1,8 +1,9 @@
 """Named pipe the sign-in screen component asks whether the owner was verified.
 
 Protocol: the client connects, writes one line ("STATUS") and reads one line
-back: "MATCH <user>" when a verification was taken, "NONE" otherwise. One
-request per connection.
+back: "MATCH <user>" when a verification was taken, otherwise "STATE <phase>"
+(starting, searching, face, unrecognized, verified or idle) for the sign-in
+screen to show. One request per connection.
 
 By default only SYSTEM may open the pipe: LogonUI, which hosts the credential
 provider, runs as SYSTEM. FILE_FLAG_FIRST_PIPE_INSTANCE makes creation fail

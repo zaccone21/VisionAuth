@@ -36,9 +36,16 @@
 // {AF1032B6-3657-4B4C-B230-7237F0183A6C}
 DEFINE_GUID(CLSID_VisionAuthProvider, 0xaf1032b6, 0x3657, 0x4b4c, 0xb2, 0x30, 0x72, 0x37, 0xf0, 0x18, 0x3a, 0x6c);
 
+#ifdef VISIONAUTH_TEST_PIPE
+// Test builds talk to the harness, never to an installed service
+static const wchar_t kPipeName[] = L"\\\\.\\pipe\\VisionAuthHarness";
+#else
 static const wchar_t kPipeName[] = L"\\\\.\\pipe\\VisionAuth";
+#endif
 static const wchar_t kSecretName[] = L"L$VisionAuthCredential";
-static const DWORD kPollIntervalMs = 300;
+static const DWORD kPollIntervalMs = 200;
+static const UINT WM_VISIONAUTH_PHASE = WM_APP + 1;
+static const wchar_t kWindowClass[] = L"VisionAuthCredentialProviderWindow";
 
 static LONG g_dllRefs = 0;
 static HINSTANCE g_module = nullptr;
@@ -66,10 +73,21 @@ static const CREDENTIAL_PROVIDER_FIELD_STATE kFieldStates[FI_COUNT] = {
 // ---------------------------------------------------------------------------
 // State shared between the provider, its credential and the polling thread
 
+// What the service is doing, shown on the tile
+enum Phase : LONG {
+    PH_OFFLINE = 0,   // the service does not answer
+    PH_STARTING,      // opening the camera
+    PH_SEARCHING,     // no face in view
+    PH_FACE,          // a face is in view, verifying
+    PH_UNRECOGNIZED,  // a face was in view but did not match
+    PH_MATCH,         // verified: logging on
+};
+
 struct SharedState {
     LONG refs = 1;
     LONG pending = 0;   // the service verified the owner; log on at the next chance
     LONG blocked = 0;   // a logon with the stored password failed: stop until the next lock
+    LONG phase = PH_STARTING;
     CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario = CPUS_INVALID;
 
     void AddRef() { InterlockedIncrement(&refs); }
@@ -107,8 +125,19 @@ static bool PipeServerIsSystem(HANDLE pipe) {
 #endif
 }
 
-// Asks the service once. True when it answered MATCH.
-static bool AskServiceForMatch() {
+// Maps a service reply ("MATCH <user>" or "STATE <phase>") to a Phase.
+static Phase ParseReply(const char* reply) {
+    if (strncmp(reply, "MATCH", 5) == 0) return PH_MATCH;
+    if (strncmp(reply, "STATE ", 6) != 0) return PH_SEARCHING;
+    const char* phase = reply + 6;
+    if (strncmp(phase, "starting", 8) == 0) return PH_STARTING;
+    if (strncmp(phase, "face", 4) == 0 || strncmp(phase, "verified", 8) == 0) return PH_FACE;
+    if (strncmp(phase, "unrecognized", 12) == 0) return PH_UNRECOGNIZED;
+    return PH_SEARCHING;
+}
+
+// Asks the service once.
+static Phase AskService() {
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (int attempt = 0; attempt < 3 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
         pipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
@@ -120,13 +149,13 @@ static bool AskServiceForMatch() {
             } else if (error == ERROR_FILE_NOT_FOUND) {
                 Sleep(20);  // the single instance is being recreated
             } else {
-                return false;
+                return PH_OFFLINE;
             }
         }
     }
-    if (pipe == INVALID_HANDLE_VALUE) return false;
+    if (pipe == INVALID_HANDLE_VALUE) return PH_OFFLINE;
 
-    bool match = false;
+    Phase phase = PH_OFFLINE;
     if (PipeServerIsSystem(pipe)) {
         static const char request[] = "STATUS\n";
         DWORD written = 0;
@@ -134,12 +163,12 @@ static bool AskServiceForMatch() {
             char reply[256] = {};
             DWORD read = 0;
             if (ReadFile(pipe, reply, sizeof(reply) - 1, &read, nullptr) && read >= 5) {
-                match = strncmp(reply, "MATCH", 5) == 0;
+                phase = ParseReply(reply);
             }
         }
     }
     CloseHandle(pipe);
-    return match;
+    return phase;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,8 +277,32 @@ static HRESULT LookupNegotiatePackage(ULONG* package) {
     return status == STATUS_SUCCESS ? S_OK : E_FAIL;
 }
 
-// A plain round logo for the sign-in option button.
-static HBITMAP CreateLogoBitmap() {
+// Tile color for each phase (0xAARRGGBB).
+static DWORD PhaseColor(LONG phase, bool blocked) {
+    if (blocked) return 0xFFFF453A;
+    switch (phase) {
+        case PH_FACE: return 0xFF0A84FF;
+        case PH_UNRECOGNIZED: return 0xFFFF9F0A;
+        case PH_MATCH: return 0xFF34C759;
+        default: return 0xFF9AA0A6;
+    }
+}
+
+// Status line for each phase.
+static const wchar_t* PhaseText(LONG phase, bool blocked) {
+    if (blocked) return L"No se pudo entrar con la contraseña guardada. Usá tu PIN.";
+    switch (phase) {
+        case PH_OFFLINE: return L"VisionAuth no está activo. Usá tu PIN.";
+        case PH_STARTING: return L"Encendiendo la cámara...";
+        case PH_FACE: return L"Te veo... verificando";
+        case PH_UNRECOGNIZED: return L"No te reconozco. Probá de nuevo o usá tu PIN.";
+        case PH_MATCH: return L"¡Hola! Entrando...";
+        default: return L"Mirá a la cámara";
+    }
+}
+
+// A round face logo in the given color, for the sign-in option and the tile.
+static HBITMAP CreateLogoBitmap(DWORD color) {
     const int size = 64;
     BITMAPINFO info = {};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -269,7 +322,7 @@ static HBITMAP CreateLogoBitmap() {
             bool ring = distance2 <= 30.0 * 30.0 && distance2 >= 24.0 * 24.0;
             bool eye = (dy + 6) * (dy + 6) + (dx - 9) * (dx - 9) <= 9 || (dy + 6) * (dy + 6) + (dx + 9) * (dx + 9) <= 9;
             bool smile = distance2 <= 15.0 * 15.0 && distance2 >= 12.0 * 12.0 && dy > 4;
-            pixels[y * size + x] = (ring || eye || smile) ? 0xFF34C759 : 0x00000000;
+            pixels[y * size + x] = (ring || eye || smile) ? color : 0x00000000;
         }
     }
     return bitmap;
@@ -333,20 +386,27 @@ class Credential final : public ICredentialProviderCredential2 {
         if (!value) return E_POINTER;
         *value = nullptr;
         if (field == FI_LABEL) return SHStrDupW(L"VisionAuth", value);
-        if (field == FI_STATUS) {
-            const wchar_t* text = state_->blocked   ? L"No se pudo entrar con la contraseña guardada. Usá tu PIN."
-                                  : state_->pending ? L"Te reconocí. Entrando..."
-                                                    : L"Mirá a la cámara para entrar.";
-            return SHStrDupW(text, value);
-        }
+        if (field == FI_STATUS) return SHStrDupW(PhaseText(state_->phase, state_->blocked != 0), value);
         return E_INVALIDARG;
     }
     IFACEMETHODIMP GetBitmapValue(DWORD field, HBITMAP* bitmap) override {
         if (!bitmap) return E_POINTER;
         *bitmap = nullptr;
         if (field != FI_LOGO) return E_INVALIDARG;
-        *bitmap = CreateLogoBitmap();
+        *bitmap = CreateLogoBitmap(PhaseColor(state_->phase, state_->blocked != 0));
         return *bitmap ? S_OK : E_OUTOFMEMORY;
+    }
+
+    // Shows a new phase on the tile. Called on LogonUI's thread only.
+    void ShowPhase(LONG phase) {
+        InterlockedExchange(&state_->phase, phase);
+        if (!events_) return;
+        events_->SetFieldString(this, FI_STATUS, PhaseText(phase, state_->blocked != 0));
+        // Not freed: the documentation does not say whether LogonUI copies it,
+        // and a deleted handle would blank the logo. It is a few small bitmaps
+        // per lock, and LogonUI exits after each unlock.
+        HBITMAP logo = CreateLogoBitmap(PhaseColor(phase, state_->blocked != 0));
+        if (logo) events_->SetFieldBitmap(this, FI_LOGO, logo);
     }
     IFACEMETHODIMP GetCheckboxValue(DWORD, BOOL*, LPWSTR*) override { return E_NOTIMPL; }
     IFACEMETHODIMP GetSubmitButtonValue(DWORD, DWORD*) override { return E_NOTIMPL; }
@@ -368,7 +428,7 @@ class Credential final : public ICredentialProviderCredential2 {
 
         // Only a fresh verification from the service lets this tile log on
         if (state_->blocked || InterlockedExchange(&state_->pending, 0) == 0) {
-            SHStrDupW(L"Mirá a la cámara para entrar.", statusText);
+            SHStrDupW(PhaseText(state_->phase, state_->blocked != 0), statusText);
             return S_OK;
         }
 
@@ -434,7 +494,6 @@ class Credential final : public ICredentialProviderCredential2 {
 class Provider final : public ICredentialProvider {
   public:
     Provider() {
-        InitializeCriticalSection(&lock_);
         DllAddRef();
     }
 
@@ -466,22 +525,23 @@ class Provider final : public ICredentialProvider {
     IFACEMETHODIMP SetSerialization(const CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION*) override {
         return E_NOTIMPL;
     }
+    // LogonUI calls Advise and UnAdvise on its UI thread. The window created
+    // here receives the phases found by the polling thread, so every call back
+    // into LogonUI happens on that same thread.
     IFACEMETHODIMP Advise(ICredentialProviderEvents* events, UINT_PTR context) override {
-        EnterCriticalSection(&lock_);
         if (events_) events_->Release();
         events_ = events;
         if (events_) events_->AddRef();
         context_ = context;
-        LeaveCriticalSection(&lock_);
+        CreateMessageWindow();
         StartPolling();
         return S_OK;
     }
     IFACEMETHODIMP UnAdvise() override {
         StopPolling();
-        EnterCriticalSection(&lock_);
+        DestroyMessageWindow();
         if (events_) events_->Release();
         events_ = nullptr;
-        LeaveCriticalSection(&lock_);
         return S_OK;
     }
     IFACEMETHODIMP GetFieldDescriptorCount(DWORD* count) override {
@@ -508,7 +568,9 @@ class Provider final : public ICredentialProvider {
         if (!count || !defaultIndex || !autoLogon) return E_POINTER;
         bool ready = state_->pending && !state_->blocked;
         *count = credential_ ? 1 : 0;
-        *defaultIndex = (ready && credential_) ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
+        // Selected by default, like Windows Hello face, so its status shows;
+        // the PIN stays one click away under the sign-in options
+        *defaultIndex = credential_ ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
         *autoLogon = (ready && credential_) ? TRUE : FALSE;
         return S_OK;
     }
@@ -522,10 +584,10 @@ class Provider final : public ICredentialProvider {
   private:
     ~Provider() {
         StopPolling();
+        DestroyMessageWindow();
         if (events_) events_->Release();
         if (credential_) credential_->Release();
         state_->Release();
-        DeleteCriticalSection(&lock_);
         DllRelease();
     }
 
@@ -549,7 +611,8 @@ class Provider final : public ICredentialProvider {
     void StopPolling() {
         if (!thread_) return;
         SetEvent(stop_);
-        WaitForSingleObject(thread_, 5000);
+        // The polling thread may itself drop the last reference
+        if (GetThreadId(thread_) != GetCurrentThreadId()) WaitForSingleObject(thread_, 5000);
         CloseHandle(thread_);
         CloseHandle(stop_);
         thread_ = nullptr;
@@ -565,24 +628,63 @@ class Provider final : public ICredentialProvider {
     }
 
     void Poll() {
-        while (WaitForSingleObject(stop_, kPollIntervalMs) == WAIT_TIMEOUT) {
+        LONG shown = -1;
+        DWORD wait = 0;  // ask right away: the tile shows the real state sooner
+        while (WaitForSingleObject(stop_, wait) == WAIT_TIMEOUT) {
+            wait = kPollIntervalMs;
             if (state_->pending || state_->blocked) continue;
-            if (!AskServiceForMatch()) continue;
-            InterlockedExchange(&state_->pending, 1);
-            EnterCriticalSection(&lock_);
-            if (events_) events_->CredentialsChanged(context_);
-            LeaveCriticalSection(&lock_);
+            Phase phase = AskService();
+            if (phase == PH_MATCH) InterlockedExchange(&state_->pending, 1);
+            if (phase != shown || phase == PH_MATCH) {
+                shown = phase;
+                PostMessageW(window_, WM_VISIONAUTH_PHASE, static_cast<WPARAM>(phase), 0);
+            }
         }
     }
 
+    // Runs on LogonUI's thread.
+    void OnPhase(LONG phase) {
+        if (credential_) credential_->ShowPhase(phase);
+        if (phase == PH_MATCH && events_) events_->CredentialsChanged(context_);
+    }
+
+    static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        if (message == WM_VISIONAUTH_PHASE) {
+            auto* self = reinterpret_cast<Provider*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+            if (self) self->OnPhase(static_cast<LONG>(wparam));
+            return 0;
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    void CreateMessageWindow() {
+        if (window_) return;
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = &WindowProc;
+        windowClass.hInstance = g_module;
+        windowClass.lpszClassName = kWindowClass;
+        RegisterClassExW(&windowClass);  // fails harmlessly if already registered
+        window_ = CreateWindowExW(0, kWindowClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, g_module, nullptr);
+        if (window_) SetWindowLongPtrW(window_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    }
+
+    void DestroyMessageWindow() {
+        if (!window_) return;
+        SetWindowLongPtrW(window_, GWLP_USERDATA, 0);
+        DestroyWindow(window_);
+        window_ = nullptr;
+        UnregisterClassW(kWindowClass, g_module);
+    }
+
     LONG refs_ = 1;
-    CRITICAL_SECTION lock_;
     SharedState* state_ = new (std::nothrow) SharedState();
     Credential* credential_ = nullptr;
     ICredentialProviderEvents* events_ = nullptr;
     UINT_PTR context_ = 0;
     HANDLE thread_ = nullptr;
     HANDLE stop_ = nullptr;
+    HWND window_ = nullptr;
 };
 
 // ---------------------------------------------------------------------------

@@ -12,8 +12,13 @@ mkdir -p build
 g++ $FLAGS -shared -o build/VisionAuthCredentialProvider.dll VisionAuthCredentialProvider.cpp VisionAuthCredentialProvider.def $LIBS
 echo "built build/VisionAuthCredentialProvider.dll"
 if [ "$1" = "--test" ]; then
-    g++ $FLAGS -shared -DVISIONAUTH_ALLOW_ANY_PIPE_SERVER -o build/VisionAuthCredentialProvider_test.dll VisionAuthCredentialProvider.cpp VisionAuthCredentialProvider.def $LIBS
-    g++ $FLAGS -municode -o build/test_harness.exe test_harness.cpp $LIBS
+    # Test variants use their own pipe name, so they never reach an installed service
+    T="-DVISIONAUTH_TEST_PIPE"
+    g++ $FLAGS -shared $T -DVISIONAUTH_ALLOW_ANY_PIPE_SERVER -o build/VisionAuthCredentialProvider_test.dll VisionAuthCredentialProvider.cpp VisionAuthCredentialProvider.def $LIBS
+    g++ $FLAGS -shared $T -o build/VisionAuthCredentialProvider_sidcheck.dll VisionAuthCredentialProvider.cpp VisionAuthCredentialProvider.def $LIBS
+    g++ $FLAGS $T -municode -o build/test_harness.exe test_harness.cpp $LIBS
+    # Any pipe server: the tile follows the service and logs on
     ./build/test_harness.exe build/VisionAuthCredentialProvider_test.dll 1
-    ./build/test_harness.exe build/VisionAuthCredentialProvider.dll 0
+    # Real SYSTEM check: a server run by a normal user is ignored
+    ./build/test_harness.exe build/VisionAuthCredentialProvider_sidcheck.dll 0
 fi

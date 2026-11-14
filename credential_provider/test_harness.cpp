@@ -94,7 +94,63 @@ class Events final : public ICredentialProviderEvents {
     }
 };
 
+// Records what the provider shows on the tile.
+class CredentialEvents final : public ICredentialProviderCredentialEvents {
+  public:
+    wchar_t lastStatus[256] = L"";
+    int bitmaps = 0;
+    IFACEMETHODIMP_(ULONG) AddRef() override { return 2; }
+    IFACEMETHODIMP_(ULONG) Release() override { return 1; }
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ICredentialProviderCredentialEvents)) {
+            *ppv = this;
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    IFACEMETHODIMP SetFieldState(ICredentialProviderCredential*, DWORD, CREDENTIAL_PROVIDER_FIELD_STATE) override {
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFieldInteractiveState(ICredentialProviderCredential*, DWORD,
+                                            CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE) override {
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFieldString(ICredentialProviderCredential*, DWORD field, LPCWSTR text) override {
+        if (field == FI_STATUS) wcsncpy(lastStatus, text, 255);
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFieldCheckbox(ICredentialProviderCredential*, DWORD, BOOL, LPCWSTR) override { return S_OK; }
+    IFACEMETHODIMP SetFieldBitmap(ICredentialProviderCredential*, DWORD, HBITMAP bitmap) override {
+        if (bitmap) ++bitmaps;
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFieldComboBoxSelectedItem(ICredentialProviderCredential*, DWORD, DWORD) override { return S_OK; }
+    IFACEMETHODIMP DeleteFieldComboBoxItem(ICredentialProviderCredential*, DWORD, DWORD) override { return S_OK; }
+    IFACEMETHODIMP AppendFieldComboBoxItem(ICredentialProviderCredential*, DWORD, LPCWSTR) override { return S_OK; }
+    IFACEMETHODIMP SetFieldSubmitButton(ICredentialProviderCredential*, DWORD, DWORD) override { return S_OK; }
+    IFACEMETHODIMP OnCreatingWindow(HWND* window) override {
+        *window = nullptr;
+        return S_OK;
+    }
+};
+
+// Waits for an event while pumping window messages, as LogonUI's UI thread does.
+static bool PumpUntil(HANDLE event, DWORD timeoutMs) {
+    DWORD deadline = GetTickCount() + timeoutMs;
+    for (;;) {
+        DWORD now = GetTickCount();
+        if (now >= deadline) return false;
+        DWORD result = MsgWaitForMultipleObjects(1, &event, FALSE, deadline - now, QS_ALLINPUT);
+        if (result == WAIT_OBJECT_0) return true;
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+    }
+}
+
+// Fake service: answers "STATE face" a few times, then "MATCH owner".
 static DWORD WINAPI FakeService(LPVOID stopEvent) {
+    int requests = 0;
     while (WaitForSingleObject(stopEvent, 0) == WAIT_TIMEOUT) {
         HANDLE pipe = CreateNamedPipeW(kPipeName, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
                                        PIPE_TYPE_BYTE | PIPE_WAIT, 1, 512, 512, 0, nullptr);
@@ -103,8 +159,8 @@ static DWORD WINAPI FakeService(LPVOID stopEvent) {
             char request[64] = {};
             DWORD read = 0, written = 0;
             ReadFile(pipe, request, sizeof(request) - 1, &read, nullptr);
-            static const char reply[] = "MATCH owner\n";
-            WriteFile(pipe, reply, sizeof(reply) - 1, &written, nullptr);
+            const char* reply = (++requests <= 3) ? "STATE face\n" : "MATCH owner\n";
+            WriteFile(pipe, reply, static_cast<DWORD>(strlen(reply)), &written, nullptr);
             FlushFileBuffers(pipe);
         }
         DisconnectNamedPipe(pipe);
@@ -149,7 +205,12 @@ static void TestDll(const wchar_t* path, bool expectMatch) {
     DWORD count = 0, defaultIndex = 0;
     BOOL autoLogon = TRUE;
     CHECK(SUCCEEDED(provider->GetCredentialCount(&count, &defaultIndex, &autoLogon)));
-    CHECK(count == 1 && !autoLogon && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT);
+    CHECK(count == 1 && !autoLogon && defaultIndex == 0);
+
+    ICredentialProviderCredential* tile = nullptr;
+    CHECK(SUCCEEDED(provider->GetCredentialAt(0, &tile)));
+    CredentialEvents tileEvents;
+    CHECK(SUCCEEDED(tile->Advise(&tileEvents)));
 
     HANDLE stopService = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     HANDLE service = CreateThread(nullptr, 0, FakeService, stopService, 0, nullptr);
@@ -157,8 +218,14 @@ static void TestDll(const wchar_t* path, bool expectMatch) {
 
     Events events;
     CHECK(SUCCEEDED(provider->Advise(&events, 42)));
-    bool changed = WaitForSingleObject(events.changed, 3000) == WAIT_OBJECT_0;
+    bool changed = PumpUntil(events.changed, 3000);
     CHECK(changed == expectMatch);
+    std::wprintf(L"  tile status shown: %ls (%d logo updates)\n", tileEvents.lastStatus, tileEvents.bitmaps);
+    CHECK(tileEvents.bitmaps >= 1);
+    // The real DLL rejects a pipe served by a normal user, so it shows "not active"
+    CHECK(wcsstr(tileEvents.lastStatus, expectMatch ? L"Hola" : L"no est") != nullptr);
+    tile->UnAdvise();
+    tile->Release();
 
     CHECK(SUCCEEDED(provider->GetCredentialCount(&count, &defaultIndex, &autoLogon)));
     CHECK((autoLogon == TRUE) == expectMatch);

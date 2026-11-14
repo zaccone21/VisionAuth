@@ -113,10 +113,47 @@ def test_held_camera_yields_frames_without_releasing_the_device() -> None:
     frame = np.zeros((4, 4, 3), dtype=np.uint8)
     camera.capture_frame.side_effect = [frame, frame, None]
 
-    held = HeldCamera(camera, max_fps=0)
+    held = HeldCamera(camera)
     frames = held.frames()
     next(frames)
     frames.close()
 
     camera.stop.assert_not_called()
     assert held.is_running
+
+
+def test_held_camera_skips_repeated_frames() -> None:
+    camera = MagicMock(spec=Camera)
+    camera.is_running = True
+    first = np.zeros((32, 32, 3), dtype=np.uint8)
+    second = np.full((32, 32, 3), 9, dtype=np.uint8)
+    camera.capture_frame.side_effect = [first, first.copy(), second, second.copy(), None]
+
+    assert len(list(HeldCamera(camera).frames())) == 2
+
+
+def test_phase_follows_the_session_and_the_face() -> None:
+    clock = Clock()
+    service, state = make_service([False], [NO_FACE, SUCCESS], clock=clock)
+    service.step()
+    assert service.phase == "idle"
+
+    state["locked"] = [True]
+    service.is_locked = lambda: True
+    service._locked = True
+    assert service.phase == "starting"
+
+    service.authenticate.side_effect = lambda: (service.note_face(), NO_FACE)[1]
+    service.step()
+    assert service.phase == "unrecognized"
+
+    clock.now += 5
+    assert service.phase == "searching"
+    service.note_face()
+    assert service.phase == "face"
+
+    service.authenticate.side_effect = [SUCCESS]
+    service.step()
+    assert service.phase == "verified"
+    service.take_verification()
+    assert service.phase == "face"

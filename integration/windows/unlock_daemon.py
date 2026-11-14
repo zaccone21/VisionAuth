@@ -8,7 +8,7 @@ from integration.windows.pipe_server import SYSTEM_ONLY_SDDL, PipeServer
 from integration.windows.session import console_session_id, session_locked, session_user
 from visionauth.auth.auth_service import AuthResult, AuthService
 from visionauth.camera.camera import Camera
-from visionauth.events.event_bus import EventBus
+from visionauth.events.event_bus import EventBus, EventType
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.recognition.recognition import Recognition
 from visionauth.service.unlock_service import HeldCamera, UnlockService
@@ -41,7 +41,9 @@ def build(config: dict[str, Any]) -> tuple[UnlockService, PipeServer]:
     profiles: dict[str, str] = config["profiles"]
     event_bus = EventBus()
     recognition = Recognition(event_bus=event_bus, confidence_threshold=float(config.get("min_confidence", 0.5)))
-    camera = HeldCamera(Camera(device_index=int(config.get("camera", 0)), width=640, height=480, fps=30.0))
+    # No resolution or frame rate: asking DirectShow for them costs about 2.5 s on
+    # every open, and this camera ignores them anyway
+    camera = HeldCamera(Camera(device_index=int(config.get("camera", 0))))
     auth = AuthService(
         camera=camera,
         recognition=recognition,
@@ -61,6 +63,7 @@ def build(config: dict[str, Any]) -> tuple[UnlockService, PipeServer]:
         return auth.authenticate(profile)
 
     service = UnlockService(is_locked=is_locked, authenticate=authenticate, camera=camera)
+    event_bus.subscribe(EventType.FACE_DETECTED, lambda payload: service.note_face())
 
     def handle_request(line: str) -> str:
         if line == "STATUS":
@@ -68,7 +71,7 @@ def build(config: dict[str, Any]) -> tuple[UnlockService, PipeServer]:
             if user:
                 logger.info("Verification handed to the sign-in screen for '%s'.", user)
                 return f"MATCH {user}"
-            return "NONE"
+            return f"STATE {service.phase}"
         return "ERROR unknown request"
 
     pipe = PipeServer(handle_request, sddl=config.get("pipe_sddl", SYSTEM_ONLY_SDDL))

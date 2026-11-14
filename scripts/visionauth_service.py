@@ -48,7 +48,7 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", handlers=handlers
     )
     # Per-frame stability and detection chatter would flood the log
-    for noisy in ("visionauth.recognition", "visionauth.enrollment.stability", "visionauth.liveness"):
+    for noisy in ("visionauth.recognition", "visionauth.enrollment.stability", "visionauth.liveness", "visionauth.events"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     from integration.windows import unlock_daemon

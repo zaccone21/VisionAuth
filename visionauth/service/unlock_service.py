@@ -5,6 +5,9 @@ camera open and runs authentication attempts; a successful one leaves a
 short-lived verification that the sign-in screen component takes, once, to
 unlock the session. While the session is unlocked the camera stays closed.
 
+It also reports a phase (camera starting, searching, face in view, face not
+recognized, verified) that the sign-in screen shows to the user.
+
 Nothing here touches the Windows API: the session state, the camera and the
 authentication are injected, so the logic is testable on its own.
 """
@@ -24,19 +27,33 @@ logger = logging.getLogger(__name__)
 # Failures that a retry a moment later cannot fix: wait longer before trying again
 CONFIGURATION_FAILURES = ("user_not_found", "incompatible_profile", "invalid_profile_data", "camera_error")
 
+# Phases reported to the sign-in screen
+PHASE_IDLE = "idle"
+PHASE_STARTING = "starting"
+PHASE_SEARCHING = "searching"
+PHASE_FACE = "face"
+PHASE_UNRECOGNIZED = "unrecognized"
+PHASE_VERIFIED = "verified"
+
+FACE_RECENT_SECONDS = 1.0
+UNRECOGNIZED_SECONDS = 3.0
+
 
 class HeldCamera:
     """Frame source for AuthService that leaves the camera open between attempts.
 
     Camera.frames() releases the device when the generator is discarded, which
     happens at the end of every authentication attempt. Reopening it costs
-    about a second plus a few dark frames, so the service holds it open and
-    feeds AuthService through this wrapper, at a bounded frame rate.
+    over a second, so the service holds it open and feeds AuthService through
+    this wrapper.
+
+    Some drivers hand out the same frame twice when read faster than they
+    capture. Repeated frames carry no new information and make the face look
+    frozen to the liveness check, so they are skipped.
     """
 
-    def __init__(self, camera: Camera, max_fps: float = 15.0) -> None:
+    def __init__(self, camera: Camera) -> None:
         self.camera = camera
-        self.min_interval = 1.0 / max_fps if max_fps > 0 else 0.0
 
     @property
     def is_running(self) -> bool:
@@ -49,15 +66,15 @@ class HeldCamera:
         self.camera.stop()
 
     def frames(self) -> Generator[np.ndarray, None, None]:
-        last = 0.0
+        previous: np.ndarray | None = None
         while self.camera.is_running:
-            wait = self.min_interval - (time.monotonic() - last)
-            if wait > 0:
-                time.sleep(wait)
-            last = time.monotonic()
             frame = self.camera.capture_frame()
             if frame is None:
                 return
+            sample = frame[::16, ::16]
+            if previous is not None and np.array_equal(sample, previous):
+                continue
+            previous = sample.copy()
             yield frame
 
 
@@ -70,8 +87,8 @@ class UnlockService:
         authenticate: Callable[[], AuthResult],
         camera: HeldCamera,
         verification_ttl: float = 15.0,
-        idle_poll: float = 0.5,
-        failure_pause: float = 2.0,
+        idle_poll: float = 0.2,
+        failure_pause: float = 0.3,
         configuration_pause: float = 10.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -102,6 +119,29 @@ class UnlockService:
         self._lock = threading.Lock()
         self._verified_until: float | None = None
         self._verified_user: str | None = None
+        self._locked = False
+        self._last_face: float | None = None
+        self._unrecognized_until: float | None = None
+
+    def note_face(self) -> None:
+        """Records that a face is in view (called for each detected face)."""
+        self._last_face = self.clock()
+
+    @property
+    def phase(self) -> str:
+        """What the service is doing, for the sign-in screen."""
+        now = self.clock()
+        if not self._locked:
+            return PHASE_IDLE
+        if self.has_verification():
+            return PHASE_VERIFIED
+        if not self.camera.is_running:
+            return PHASE_STARTING
+        if self._unrecognized_until is not None and now <= self._unrecognized_until:
+            return PHASE_UNRECOGNIZED
+        if self._last_face is not None and now - self._last_face <= FACE_RECENT_SECONDS:
+            return PHASE_FACE
+        return PHASE_SEARCHING
 
     def take_verification(self) -> str | None:
         """Consumes the current verification, if any.
@@ -129,41 +169,53 @@ class UnlockService:
 
     def step(self) -> None:
         """Runs one iteration: idle while unlocked, authenticate while locked."""
-        if not self.is_locked():
+        self._locked = self.is_locked()
+        if not self._locked:
             if self.camera.is_running:
                 logger.info("Session unlocked: releasing the camera.")
                 self.camera.stop()
             self._clear_verification()
+            self._last_face = None
+            self._unrecognized_until = None
             self.sleep(self.idle_poll)
             return
 
         if self.has_verification():
             # Waiting for the sign-in screen to take it
-            self.sleep(0.2)
+            self.sleep(0.05)
             return
 
         if not self.camera.is_running:
             try:
                 logger.info("Session locked: opening the camera.")
+                started = self.clock()
                 self.camera.start()
+                logger.info("Camera open in %.2f s.", self.clock() - started)
             except CameraError as e:
                 logger.error("Could not open the camera: %s", e)
                 self.sleep(self.configuration_pause)
                 return
 
+        attempt_started = self.clock()
         result = self.authenticate()
         if result.success:
             logger.info("Owner verified (similarity %.3f).", result.confidence)
             with self._lock:
                 self._verified_until = self.clock() + self.verification_ttl
                 self._verified_user = result.user
-        elif result.reason in CONFIGURATION_FAILURES:
+            self._unrecognized_until = None
+            return
+
+        face_seen = self._last_face is not None and self._last_face >= attempt_started
+        if result.reason in CONFIGURATION_FAILURES:
             logger.error("Authentication cannot run: %s", result.reason)
             self.sleep(self.configuration_pause)
         elif result.reason == "spoof_detected":
             logger.warning("Rejected a face that did not look live.")
             self.sleep(self.failure_pause)
         else:
+            if face_seen:
+                self._unrecognized_until = self.clock() + UNRECOGNIZED_SECONDS
             logger.debug("No verification this attempt: %s", result.reason)
 
     def run(self, stop: threading.Event) -> None:

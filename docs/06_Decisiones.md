@@ -206,3 +206,26 @@ proceso de SYSTEM recibió frames y detectó la cara.
   usuario administrador no agrega un riesgo real.
 - Una foto o un video del dueño probablemente desbloquea (D10).
 
+
+## D14. Velocidad del desbloqueo y estado en la pantalla de bloqueo
+
+**Mediciones (2026-11-14).** Con la versión v0.1.0, del bloqueo al desbloqueo
+pasaban de 6 a 7.5 segundos. La cámara de este equipo:
+- Abre y da un frame con imagen en ~1.3 s si no se le pide nada. Pedirle
+  resolución o fps por DirectShow suma ~2.5 s, y igual entrega 1280x720.
+- Da ~14.5 frames reales por segundo con cualquier backend o resolución.
+  Media Foundation devuelve cada frame dos veces, y DirectShow, al leerse
+  rápido, también puede repetirlos.
+- Procesar un frame (BlazeFace + YuNet + SFace) cuesta ~23 ms.
+
+**Decisión.**
+- La cámara del servicio se abre sin pedir resolución ni fps.
+- Los frames repetidos se descartan antes del liveness: comparan dos frames
+  idénticos y lo hacían rechazar caras reales.
+- La sesión se revisa cada 0.2 s y la pantalla consulta al servicio cada
+  0.2 s. Tras un rechazo del liveness se reintenta a los 0.3 s, no a los 2 s.
+- El servicio informa su estado (cámara encendiéndose, buscando, cara a la
+  vista, cara no reconocida) y la opción VisionAuth de la pantalla de
+  bloqueo lo muestra con un ícono de color y un texto. La opción queda
+  seleccionada por defecto, como el rostro de Windows Hello; el PIN sigue en
+  "Opciones de inicio de sesión".
