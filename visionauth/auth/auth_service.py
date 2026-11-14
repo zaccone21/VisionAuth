@@ -2,7 +2,6 @@
 """
 
 import time
-import os
 import cv2
 import numpy as np
 import logging
@@ -11,7 +10,12 @@ from visionauth.recognition.recognition import Recognition
 from visionauth.enrollment.embedder import RealFaceEmbedder
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.liveness.liveness_detector import LivenessDetector
-from visionauth.recognition.recognition_embeddings import cosine_similarity, crop_face
+from visionauth.recognition.recognition_embeddings import (
+    DEFAULT_MATCH_THRESHOLD,
+    cosine_similarity,
+    crop_face,
+    is_profile_compatible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,7 @@ class AuthService:
         persistence: UserPersistence | None = None,
         embedder: RealFaceEmbedder | None = None,
         liveness_detector: LivenessDetector | None = None,
-        auth_threshold: float = 0.65,
+        auth_threshold: float = DEFAULT_MATCH_THRESHOLD,
         max_auth_time: float = 5.0,
     ) -> None:
         self.camera = camera
@@ -64,12 +68,7 @@ class AuthService:
             logger.error("Authentication failed: user '%s' profile not found.", username)
             return AuthResult(success=False, reason="user_not_found", confidence=0.0, user=None)
 
-        # Validate profile compatibility
-        model = profile.get("embedding_model")
-        dimension = profile.get("embedding_dimension")
-        version = profile.get("embedding_version")
-        if model != "FaceNet-512" or dimension != 512 or version != 2:
-            print("User profile created with an incompatible embedding model. Please enroll again.")
+        if not is_profile_compatible(profile):
             logger.error("User profile created with an incompatible embedding model. Please enroll again.")
             return AuthResult(success=False, reason="incompatible_profile", confidence=0.0, user=None)
 
@@ -155,16 +154,6 @@ class AuthService:
                         # Evaluate biometric match only if live
                         if liveness_res.is_live:
                             sim = cosine_similarity(emb, centroid_arr)
-                            emb_norm = float(np.linalg.norm(emb))
-                            cent_norm = float(np.linalg.norm(centroid_arr))
-                            decision = "MATCH" if sim >= self.auth_threshold else "NO MATCH"
-                            
-                            print(f"Current embedding norm:\n{emb_norm:.2f}")
-                            print(f"Centroid norm:\n{cent_norm:.2f}")
-                            print(f"Cosine similarity:\n{sim:.2f}")
-                            print(f"Threshold:\n{self.auth_threshold:.2f}")
-                            print(f"Decision:\n{decision}")
-                            
                             logger.info("Similarity score: %.4f (threshold: %.2f)", sim, self.auth_threshold)
                             if sim >= self.auth_threshold:
                                 logger.info("MATCH decision: User '%s' authenticated successfully. Similarity: %.4f", username, sim)

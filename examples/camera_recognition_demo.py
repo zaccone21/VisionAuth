@@ -39,14 +39,19 @@ def main() -> None:
     # 2. Instantiate Recognition, Camera, and Embeddings components
     recognition = Recognition(event_bus=event_bus, confidence_threshold=0.6)
     
-    from visionauth.recognition.recognition_embeddings import EmbeddingExtractor, EmbeddingMatcher, crop_face
+    from visionauth.recognition.recognition_embeddings import (
+        DEFAULT_MATCH_THRESHOLD,
+        EmbeddingExtractor,
+        EmbeddingMatcher,
+        crop_face,
+    )
     try:
         extractor = EmbeddingExtractor()
     except Exception as e:
-        print(f"CRITICAL ERROR: FaceNet model failed to load. {e}")
+        print(f"CRITICAL ERROR: embedding model failed to load. {e}")
         sys.exit(1)
         
-    matcher = EmbeddingMatcher(data_dir="examples/data")
+    matcher = EmbeddingMatcher(data_dir="data")
 
     # Use default webcam (index 0)
     camera = Camera(device_index=0, width=640, height=480, fps=30.0)
@@ -82,9 +87,9 @@ def main() -> None:
                     emb_norm = float(np.linalg.norm(emb))
                     print(f"Embedding norm: {emb_norm:.4f}")
                     
-                    res_user, res_sim = matcher.match_face(emb, threshold=0.65)
+                    res_user, res_sim = matcher.match_face(emb, threshold=DEFAULT_MATCH_THRESHOLD)
                     print(f"Similarity: {res_sim:.2f}")
-                    print(f"Threshold: 0.65")
+                    print(f"Threshold: {DEFAULT_MATCH_THRESHOLD:.2f}")
                     
                     if res_user is not None:
                         matched_user = res_user

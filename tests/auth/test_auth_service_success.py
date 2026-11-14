@@ -7,6 +7,11 @@ from visionauth.recognition.recognition import Recognition, DetectionResult
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.auth.auth_service import AuthService
 from visionauth.enrollment.embedder import RealFaceEmbedder
+from visionauth.recognition.recognition_embeddings import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    EMBEDDING_VERSION,
+)
 
 
 def test_auth_service_success() -> None:
@@ -29,14 +34,14 @@ def test_auth_service_success() -> None:
 
     # 3. Setup mock persistence loading centroid
     mock_persistence = MagicMock(spec=UserPersistence)
-    centroid_vec = np.zeros(512, dtype=np.float32)
+    centroid_vec = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
     centroid_vec[0] = 1.0
     mock_persistence.load_user_profile.return_value = {
         "user": "test_user",
         "centroid": centroid_vec.tolist(),
-        "embedding_model": "FaceNet-512",
-        "embedding_dimension": 512,
-        "embedding_version": 2
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION,
+        "embedding_version": EMBEDDING_VERSION,
     }
 
     # 4. Setup mock embedder returning embeddings with slight noise
@@ -44,9 +49,9 @@ def test_auth_service_success() -> None:
     np.random.seed(123)
     embeddings = []
     for i in range(11):
-        emb = np.zeros(512, dtype=np.float32)
+        emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
         emb[0] = 1.0
-        noise = np.random.normal(0.0, 0.02, 512).astype(np.float32)
+        noise = np.random.normal(0.0, 0.02, EMBEDDING_DIMENSION).astype(np.float32)
         emb += noise
         emb /= np.linalg.norm(emb)
         embeddings.append(emb)

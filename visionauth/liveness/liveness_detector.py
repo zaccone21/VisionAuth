@@ -51,7 +51,7 @@ class LivenessDetector:
         """Adds a detection frame to the temporal rolling buffer.
 
         Args:
-            embedding: 128D face embedding numpy array.
+            embedding: L2-normalized face embedding numpy array.
             bbox: Bounding box relative coordinates (xmin, ymin, width, height).
         """
         xmin, ymin, w, h = bbox

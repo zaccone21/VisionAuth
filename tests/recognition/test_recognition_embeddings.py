@@ -6,9 +6,15 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 from visionauth.recognition.recognition_embeddings import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    EMBEDDING_VERSION,
+    MODELS_DIR,
+    RECOGNIZER_MODEL_FILE,
     EmbeddingExtractor,
     EmbeddingMatcher,
     cosine_similarity,
+    is_profile_compatible,
 )
 
 
@@ -39,41 +45,41 @@ def test_invalid_model(tmp_path) -> None:
         EmbeddingExtractor(model_path=str(model_file))
 
 
-@patch("cv2.dnn.readNetFromONNX")
-def test_incorrect_dimension(mock_read_net, tmp_path) -> None:
+@patch("cv2.FaceRecognizerSF.create")
+def test_incorrect_dimension(mock_create, tmp_path) -> None:
     model_file = tmp_path / "dummy.onnx"
     model_file.write_text("dummy content")
     
-    mock_net = MagicMock()
-    # Returns a 128-dimensional output instead of 512
-    mock_net.forward.return_value = np.zeros((1, 128), dtype=np.float32)
-    mock_read_net.return_value = mock_net
+    mock_recognizer = MagicMock()
+    # Returns an output with the wrong dimension
+    mock_recognizer.feature.return_value = np.ones((1, EMBEDDING_DIMENSION * 2), dtype=np.float32)
+    mock_create.return_value = mock_recognizer
     
     with pytest.raises(RuntimeError) as excinfo:
         EmbeddingExtractor(model_path=str(model_file))
     assert "validation failed" in str(excinfo.value)
 
 
-@patch("cv2.dnn.readNetFromONNX")
-def test_nan_inf_embeddings(mock_read_net, tmp_path) -> None:
+@patch("cv2.FaceRecognizerSF.create")
+def test_nan_inf_embeddings(mock_create, tmp_path) -> None:
     model_file = tmp_path / "dummy.onnx"
     model_file.write_text("dummy content")
     
     # 1. Test NaN
-    mock_net = MagicMock()
-    nan_arr = np.zeros((1, 512), dtype=np.float32)
+    mock_recognizer = MagicMock()
+    nan_arr = np.ones((1, EMBEDDING_DIMENSION), dtype=np.float32)
     nan_arr[0, 0] = np.nan
-    mock_net.forward.return_value = nan_arr
-    mock_read_net.return_value = mock_net
+    mock_recognizer.feature.return_value = nan_arr
+    mock_create.return_value = mock_recognizer
     
     with pytest.raises(RuntimeError) as excinfo:
         EmbeddingExtractor(model_path=str(model_file))
     assert "validation failed" in str(excinfo.value)
     
     # 2. Test Inf
-    inf_arr = np.zeros((1, 512), dtype=np.float32)
+    inf_arr = np.ones((1, EMBEDDING_DIMENSION), dtype=np.float32)
     inf_arr[0, 0] = np.inf
-    mock_net.forward.return_value = inf_arr
+    mock_recognizer.feature.return_value = inf_arr
     
     with pytest.raises(RuntimeError) as excinfo:
         EmbeddingExtractor(model_path=str(model_file))
@@ -85,13 +91,13 @@ def test_incompatible_profile(tmp_path) -> None:
     user_dir = os.path.join(data_dir, "users", "test_user")
     os.makedirs(user_dir, exist_ok=True)
     
-    # Write a profile with wrong dimension (128)
+    # Write a profile with wrong dimension
     profile = {
         "user": "test_user",
-        "embeddings": [np.zeros(128).tolist()],
-        "embedding_model": "FaceNet-512",
-        "embedding_dimension": 128,  # Incompatible
-        "embedding_version": 2
+        "embeddings": [np.zeros(EMBEDDING_DIMENSION * 2).tolist()],
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION * 2,  # Incompatible
+        "embedding_version": EMBEDDING_VERSION,
     }
     with open(os.path.join(user_dir, "profile.json"), "w") as f:
         json.dump(profile, f)
@@ -106,13 +112,13 @@ def test_version_incompatible(tmp_path) -> None:
     user_dir = os.path.join(data_dir, "users", "test_user")
     os.makedirs(user_dir, exist_ok=True)
     
-    # Write profile with version 1 instead of 2
+    # Write profile with an older version
     profile = {
         "user": "test_user",
-        "embeddings": [np.zeros(512).tolist()],
-        "embedding_model": "FaceNet-512",
-        "embedding_dimension": 512,
-        "embedding_version": 1  # Incompatible version
+        "embeddings": [np.zeros(EMBEDDING_DIMENSION).tolist()],
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION,
+        "embedding_version": EMBEDDING_VERSION - 1,  # Incompatible version
     }
     with open(os.path.join(user_dir, "profile.json"), "w") as f:
         json.dump(profile, f)
@@ -127,22 +133,47 @@ def test_compatible_profile_match(tmp_path) -> None:
     user_dir = os.path.join(data_dir, "users", "test_user")
     os.makedirs(user_dir, exist_ok=True)
     
-    # Write profile with version 2 and 512D
+    # Write profile with the current model, dimension and version
     profile = {
         "user": "test_user",
         "embeddings": [
-            [1.0] + [0.0]*511
+            [1.0] + [0.0] * (EMBEDDING_DIMENSION - 1)
         ],
-        "embedding_model": "FaceNet-512",
-        "embedding_dimension": 512,
-        "embedding_version": 2
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION,
+        "embedding_version": EMBEDDING_VERSION,
     }
     with open(os.path.join(user_dir, "profile.json"), "w") as f:
         json.dump(profile, f)
         
     matcher = EmbeddingMatcher(data_dir=data_dir)
     
-    query = np.array([1.0] + [0.0]*511, dtype=np.float32)
+    query = np.array([1.0] + [0.0] * (EMBEDDING_DIMENSION - 1), dtype=np.float32)
     user, sim = matcher.match_face(query, threshold=0.7)
     assert user == "test_user"
     assert sim > 0.99
+
+
+def test_is_profile_compatible() -> None:
+    profile = {
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimension": EMBEDDING_DIMENSION,
+        "embedding_version": EMBEDDING_VERSION,
+    }
+    assert is_profile_compatible(profile)
+    assert not is_profile_compatible({**profile, "embedding_model": "FaceNet-512"})
+    assert not is_profile_compatible({})
+
+
+@pytest.mark.skipif(
+    not (MODELS_DIR / RECOGNIZER_MODEL_FILE).exists(),
+    reason="SFace model not downloaded (run scripts/download_models.py)",
+)
+def test_real_model_extracts_normalized_embedding() -> None:
+    extractor = EmbeddingExtractor()
+    face_crop = np.random.default_rng(0).integers(0, 255, (150, 130, 3), dtype=np.uint8)
+
+    emb = extractor.extract_embedding(face_crop)
+
+    assert emb.shape == (EMBEDDING_DIMENSION,)
+    assert abs(float(np.linalg.norm(emb)) - 1.0) < 1e-5

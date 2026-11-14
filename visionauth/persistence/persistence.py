@@ -10,6 +10,12 @@ import os
 import cv2
 import numpy as np
 
+from visionauth.recognition.recognition_embeddings import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    EMBEDDING_VERSION,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,9 +89,9 @@ class UserPersistence:
             profile_data = {
                 "user": username,
                 "embeddings": embeddings,
-                "embedding_model": "FaceNet-512",
-                "embedding_dimension": 512,
-                "embedding_version": 2
+                "embedding_model": EMBEDDING_MODEL,
+                "embedding_dimension": EMBEDDING_DIMENSION,
+                "embedding_version": EMBEDDING_VERSION,
             }
             try:
                 emb_array = np.array(embeddings, dtype=np.float32)

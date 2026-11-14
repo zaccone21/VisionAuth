@@ -40,7 +40,7 @@ class DummyFaceEmbedder(FaceEmbedder):
 
 
 class RealFaceEmbedder(FaceEmbedder):
-    """Real FaceEmbedder implementation using the lightweight FaceNet ONNX model."""
+    """Real FaceEmbedder implementation using the SFace ONNX model."""
 
     def __init__(self, model_path: str | None = None) -> None:
         from visionauth.recognition.recognition_embeddings import EmbeddingExtractor

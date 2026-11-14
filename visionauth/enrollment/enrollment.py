@@ -18,6 +18,7 @@ from visionauth.enrollment.embedder import DummyFaceEmbedder, FaceEmbedder, Real
 from visionauth.enrollment.stability import FaceStabilityTracker
 from visionauth.persistence.persistence import UserPersistence
 from visionauth.recognition.recognition import DetectionResult, Recognition
+from visionauth.recognition.recognition_embeddings import EMBEDDING_DIMENSION
 
 logger = logging.getLogger(__name__)
 
@@ -436,10 +437,10 @@ class EnrollmentService:
                         if face_crop.size > 0:
                             emb = self.embedder.generate_embedding(face_crop)
                             if len(emb) == 0:
-                                emb = np.zeros(512, dtype=np.float32)
+                                emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
                             embeddings.append(emb.tolist())
                         else:
-                            embeddings.append(np.zeros(512, dtype=np.float32).tolist())
+                            embeddings.append(np.zeros(EMBEDDING_DIMENSION, dtype=np.float32).tolist())
                             
                         samples.append(frame.copy())
                         
@@ -586,9 +587,9 @@ class EnrollmentService:
                 if last_face_crop.size > 0:
                     last_emb = self.embedder.generate_embedding(last_face_crop)
                 else:
-                    last_emb = np.zeros(512, dtype=np.float32)
+                    last_emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
             else:
-                last_emb = np.zeros(512, dtype=np.float32)
+                last_emb = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
                 
             self_sim = float(np.dot(last_emb, final_centroid))
             print(f"Enrollment self similarity:\n{self_sim:.2f}")

@@ -18,6 +18,7 @@ from visionauth.enrollment.enrollment import (
     UserAlreadyExistsError,
 )
 from visionauth.persistence.persistence import UserPersistence
+from visionauth.recognition.recognition_embeddings import EMBEDDING_DIMENSION
 from visionauth.recognition.recognition import DetectionResult, Recognition
 
 
@@ -776,9 +777,9 @@ def test_enrollment_self_similarity_fail(tmp_path: pytest.TempPathFactory) -> No
     # Mock embedder that returns incompatible embeddings (e.g. opposite vectors) on consecutive calls
     # first call (during enrollment loop) returns vector A, second call (during self test) returns opposite vector -A
     mock_embedder = MagicMock()
-    vec_a = np.zeros(512, dtype=np.float32)
+    vec_a = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
     vec_a[0] = 1.0
-    vec_b = np.zeros(512, dtype=np.float32)
+    vec_b = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
     vec_b[0] = -1.0 # Cosine similarity will be -1.0
     mock_embedder.generate_embedding.side_effect = [vec_a, vec_b]
 
