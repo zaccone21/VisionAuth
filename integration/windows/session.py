@@ -34,3 +34,26 @@ def session_locked() -> bool | None:
         return flags == WTS_SESSIONSTATE_LOCK
     finally:
         wtsapi32.WTSFreeMemory(buffer)
+
+
+WTS_USER_NAME = 5
+
+
+def console_session_id() -> int:
+    """Id of the session attached to the physical screen and keyboard."""
+    return ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+
+
+def session_user(session_id: int) -> str | None:
+    """User signed in to a session, or None if nobody is (e.g. the sign-in screen after boot)."""
+    wtsapi32 = ctypes.WinDLL("wtsapi32")
+    buffer = ctypes.c_wchar_p()
+    size = wintypes.DWORD()
+    if not wtsapi32.WTSQuerySessionInformationW(
+        WTS_CURRENT_SERVER_HANDLE, session_id, WTS_USER_NAME, ctypes.byref(buffer), ctypes.byref(size)
+    ):
+        return None
+    try:
+        return buffer.value or None
+    finally:
+        wtsapi32.WTSFreeMemory(buffer)
