@@ -13,6 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from visionauth.paths import resolve_data_dir
+
 logger = logging.getLogger(__name__)
 
 MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
@@ -196,8 +198,8 @@ class EmbeddingMatcher:
     """Matches face embeddings against enrolled user profiles using cosine similarity."""
 
     def __init__(self, data_dir: str = "data") -> None:
-        self.data_dir = data_dir
-        self.users_dir = os.path.join(data_dir, "users")
+        self.data_dir = resolve_data_dir(data_dir)
+        self.users_dir = os.path.join(self.data_dir, "users")
 
     def load_profiles(self) -> dict[str, list[np.ndarray]]:
         """Loads all user profiles and their embeddings from profile.json files."""

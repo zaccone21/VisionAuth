@@ -10,6 +10,7 @@ import os
 import cv2
 import numpy as np
 
+from visionauth.paths import resolve_data_dir
 from visionauth.recognition.recognition_embeddings import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
@@ -30,10 +31,11 @@ class UserPersistence:
         """Initializes the UserPersistence manager.
 
         Args:
-            data_dir: Base directory for all data storage. Defaults to "data".
+            data_dir: Base directory for all data storage. A relative path is
+                resolved against the project root. Defaults to "data".
         """
-        self.data_dir = data_dir
-        self.users_dir = os.path.join(data_dir, "users")
+        self.data_dir = resolve_data_dir(data_dir)
+        self.users_dir = os.path.join(self.data_dir, "users")
 
     def user_exists(self, username: str) -> bool:
         """Checks if a user is already enrolled.

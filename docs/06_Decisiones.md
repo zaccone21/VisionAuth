@@ -137,3 +137,24 @@ seguridad mínima.
 **Implica.** Una foto o un video del dueño frente a la cámara probablemente
 desbloquee la PC. La contraseña de Windows sigue funcionando como alternativa.
 
+## D11. La cámara funciona con la sesión bloqueada desde la sesión del usuario
+
+**Resultado.** El 2026-11-14, `scripts/lock_screen_camera_probe.py` bloqueó la
+sesión y siguió leyendo la webcam desde un proceso común de la sesión del
+usuario: recibió frames y detectó la cara durante todo el bloqueo, también
+tras cerrar y volver a abrir la cámara con la pantalla de contraseña visible.
+
+**Implica.**
+- El servicio residente puede correr en la sesión del usuario (por ejemplo,
+  una tarea programada al iniciar sesión), sin necesidad de un servicio de
+  Windows en Session 0.
+- Así solo se puede desbloquear una sesión ya iniciada. El primer inicio de
+  sesión después de reiniciar no tiene sesión de usuario: para eso haría
+  falta un servicio en Session 0, que no se probó.
+- Para saber si la sesión está bloqueada no sirve mirar el escritorio activo:
+  la pantalla de bloqueo corre en el escritorio normal y el escritorio seguro
+  solo aparece al pedir la contraseña. Se usa `WTSSessionInfoEx`
+  (`integration/windows/session.py`).
+- Los datos de usuario se guardan siempre en `data/` de la raíz del proyecto,
+  sin importar desde dónde se ejecute (`visionauth/paths.py`).
+

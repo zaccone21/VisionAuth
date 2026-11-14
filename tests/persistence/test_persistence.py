@@ -82,3 +82,20 @@ def test_save_without_append_replaces_profile(tmp_path) -> None:
 
     assert persistence.load_user_profile("ana")["embeddings"] == [unit(1)]
     assert metadata["sample_count"] == 1
+
+
+def test_relative_data_dir_resolves_against_project_not_working_directory(tmp_path, monkeypatch) -> None:
+    """Enrolling from examples/ and authenticating from elsewhere must use the same profiles."""
+    from visionauth.paths import PROJECT_ROOT
+    from visionauth.recognition.recognition_embeddings import EmbeddingMatcher
+
+    monkeypatch.chdir(tmp_path)
+
+    expected = os.path.join(str(PROJECT_ROOT / "data"), "users")
+    assert UserPersistence().users_dir == expected
+    assert UserPersistence("data").users_dir == expected
+    assert EmbeddingMatcher().users_dir == expected
+
+
+def test_absolute_data_dir_is_kept(tmp_path) -> None:
+    assert UserPersistence(str(tmp_path)).users_dir == os.path.join(str(tmp_path), "users")

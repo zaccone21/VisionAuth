@@ -25,23 +25,11 @@ import cv2
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from integration.windows.session import session_locked  # noqa: E402
 from visionauth.events.event_bus import EventBus  # noqa: E402
 from visionauth.recognition.recognition import Recognition  # noqa: E402
 
 LOG_FILE = PROJECT_ROOT / "lock_screen_camera_probe.log"
-DESKTOP_SWITCHDESKTOP = 0x0100
-
-
-def session_locked() -> bool:
-    """True when the input desktop is not the user's (lock screen or UAC prompt)."""
-    user32 = ctypes.windll.user32
-    desktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
-    if not desktop:
-        return True
-    try:
-        return not user32.SwitchDesktop(desktop)
-    finally:
-        user32.CloseDesktop(desktop)
 
 
 def open_camera(index: int) -> cv2.VideoCapture:

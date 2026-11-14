@@ -14,7 +14,7 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 |---|---|---|
 | 1 | Estructura, configuración, logging | Parcial |
 | 2 | Cámara | Hecha |
-| 3 | Enrollment | Hecha, falta calibrar en el setup real |
+| 3 | Enrollment | Hecha |
 | 4 | Reconocimiento | Hecha, falta calibrar el umbral |
 | 5 | Liveness | Pasivo, sin gestos (ver D10) |
 | 6 | Event Bus | Hecha |
@@ -46,7 +46,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 - [ ] Calibrar los umbrales de pose (`pose_yaw_threshold`,
       `pose_pitch_threshold`, `NEUTRAL_PITCH_RATIO`) con los ángulos que guarda
       cada muestra en `profile.json`.
-- [ ] Enrolarse en el setup final, con la cámara de costado.
+- [x] Enrolarse en el setup final, con la cámara de costado (2026-11-14:
+      8 muestras; la autenticación da similitud 0.78 con umbral 0.45).
 
 ## Fase 4: reconocimiento
 
@@ -80,11 +81,14 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 
 En este orden, porque el primer paso puede cambiar el diseño del resto:
 
-1. [ ] **Prueba de concepto: cámara con la sesión bloqueada.** Comprobar si un
-       proceso (servicio en Session 0 o tarea de la sesión) puede abrir la
-       webcam mientras está la pantalla de bloqueo. Para el proceso de la
-       sesión: `python scripts/lock_screen_camera_probe.py`.
-2. [ ] Detectar bloqueo y desbloqueo de la sesión (`WTSRegisterSessionNotification`).
+1. [x] **Prueba de concepto: cámara con la sesión bloqueada.** Un proceso de
+       la sesión del usuario recibe frames y detecta la cara con la pantalla
+       bloqueada, también si abre la cámara después de bloquear (D11).
+       Falta probarlo desde Session 0 si se quiere el primer inicio de sesión
+       tras reiniciar. Script: `python scripts/lock_screen_camera_probe.py`.
+2. [ ] Detectar bloqueo y desbloqueo de la sesión. Ya existe la consulta
+       puntual (`integration/windows/session.py`); falta la notificación
+       (`WTSRegisterSessionNotification`).
 3. [ ] Comunicación local entre el servicio y el Credential Provider (named pipe).
 4. [ ] Guardar la contraseña cifrada (DPAPI o secreto LSA). Windows exige la
        contraseña real para iniciar sesión.
@@ -103,7 +107,6 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 
 ## Próximos pasos
 
-1. Probar el enrollment en el desktop con Windows y la cámara de costado.
-2. Prueba de concepto de la cámara con la sesión bloqueada.
+1. Servicio residente (fase 7) en la sesión del usuario.
+2. Credential Provider y comunicación con el servicio.
 3. Calibrar el umbral de reconocimiento.
-4. Servicio residente y comunicación con el Credential Provider.
