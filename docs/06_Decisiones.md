@@ -123,3 +123,17 @@ Windows Hello.
 **Por qué.** Es lo que ya implementaba el código. Difiere del SDD, que pedía
 `embedding.npy`. Las fotos permiten volver a generar los embeddings si se cambia
 de modelo.
+
+## D10. Sin gestos: liveness pasivo y seguridad mínima
+
+**Decisión.** El desbloqueo no pide gestos (ni parpadeo ni giro de cabeza).
+El objetivo es sentarse frente a la PC y que se abra si es el dueño. Se
+mantiene la verificación pasiva actual (microvariaciones del recuadro y de los
+embeddings).
+
+**Por qué.** El dueño del proyecto prioriza la comodidad y pidió solo la
+seguridad mínima.
+
+**Implica.** Una foto o un video del dueño frente a la cámara probablemente
+desbloquee la PC. La contraseña de Windows sigue funcionando como alternativa.
+

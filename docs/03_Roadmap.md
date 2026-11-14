@@ -16,7 +16,7 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 | 2 | Cámara | Hecha |
 | 3 | Enrollment | Hecha, falta calibrar en el setup real |
 | 4 | Reconocimiento | Hecha, falta calibrar el umbral |
-| 5 | Liveness | Débil: no frena una foto |
+| 5 | Liveness | Pasivo, sin gestos (ver D10) |
 | 6 | Event Bus | Hecha |
 | 7 | Servicio residente | No empezada |
 | 8 | Integración con Windows | No empezada |
@@ -59,10 +59,8 @@ webcam RGB ubicada al costado de la pantalla. Ver [01_PRD](01_PRD.md) y
 ## Fase 5: liveness
 
 - [x] Heurística actual: microvariaciones del recuadro y de los embeddings.
-- [ ] Desafío activo con la webcam RGB: pedir un parpadeo o un giro de cabeza
-      y verificarlo con los puntos de la cara. Sin esto, una foto de tu cara
-      en el celular probablemente pasa.
-- [ ] Probar el rechazo con una foto y con un video.
+- [x] ~~Desafío activo (parpadeo o giro de cabeza)~~: descartado, ver D10.
+- [ ] Probar qué pasa con una foto en el celular, para saber el riesgo real.
 
 ## Fase 6: Event Bus
 
@@ -84,7 +82,8 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 
 1. [ ] **Prueba de concepto: cámara con la sesión bloqueada.** Comprobar si un
        proceso (servicio en Session 0 o tarea de la sesión) puede abrir la
-       webcam mientras está la pantalla de bloqueo.
+       webcam mientras está la pantalla de bloqueo. Para el proceso de la
+       sesión: `python scripts/lock_screen_camera_probe.py`.
 2. [ ] Detectar bloqueo y desbloqueo de la sesión (`WTSRegisterSessionNotification`).
 3. [ ] Comunicación local entre el servicio y el Credential Provider (named pipe).
 4. [ ] Guardar la contraseña cifrada (DPAPI o secreto LSA). Windows exige la
@@ -106,5 +105,5 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
 
 1. Probar el enrollment en el desktop con Windows y la cámara de costado.
 2. Prueba de concepto de la cámara con la sesión bloqueada.
-3. Liveness con desafío activo y calibración del umbral.
+3. Calibrar el umbral de reconocimiento.
 4. Servicio residente y comunicación con el Credential Provider.
