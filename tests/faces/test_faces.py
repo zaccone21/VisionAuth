@@ -92,3 +92,17 @@ def test_remove_deletes_the_folder(tmp_path) -> None:
     make_face(tmp_path, "Ana")
     remove_face(str(tmp_path), "Ana")
     assert not os.path.exists(tmp_path / "users" / "Ana")
+
+
+def test_remove_and_rename_reject_paths_outside_users(tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "profile.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data" / "users").mkdir(parents=True)
+    data_dir = str(tmp_path / "data")
+
+    with pytest.raises(InvalidFaceName):
+        remove_face(data_dir, "../../outside")
+    with pytest.raises(InvalidFaceName):
+        rename_face(data_dir, "../../outside", "Ana")
+    assert (outside / "profile.json").exists()

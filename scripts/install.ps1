@@ -6,10 +6,10 @@
     Run from PowerShell as administrator, signed in as the user to unlock:
         .\scripts\install.ps1 [-SkipLockScreen] [-Camera <index>]
 
-    0. Checks the Python dependencies and, if no face is enrolled yet, opens
-       the enrollment window for the first one.
+    0. Checks the Python dependencies.
     1. Writes C:\ProgramData\VisionAuth\config.json. The account to unlock is
        the one running this script; a reinstall keeps the camera and sensitivity.
+       If no face is enrolled yet, opens the enrollment window for the first one.
     2. Registers and starts the "VisionAuth" service (SYSTEM, automatic start).
     3. Copies the credential provider to C:\Program Files\VisionAuth and registers it.
     4. Asks for the account password if none is stored yet (scripts\set_password.py).
@@ -61,15 +61,6 @@ $passwordScript = Join-Path $projectRoot "scripts\set_password.py"
 # The boot probe used during development would compete for the camera
 Unregister-ScheduledTask -TaskName "VisionAuthBootCameraProbe" -Confirm:$false -ErrorAction SilentlyContinue
 
-# 0. The first face. Its name is the one in the greeting ("Hola, <nombre>").
-$faces = @(& python -m visionauth.cli --data-dir $dataDir faces list)
-if ($faces.Count -eq 0) {
-    Write-Host "Todavía no hay ninguna cara registrada. Vamos a registrar la tuya."
-    $name = Read-Host "Nombre para el saludo (por ejemplo, tu nombre de pila)"
-    & python -m visionauth.cli --data-dir $dataDir faces add $name
-    if ($LASTEXITCODE -ne 0) { throw "No se registró ninguna cara. Volvé a correr el instalador para intentarlo." }
-}
-
 # 1. Configuration. A reinstall keeps the camera and the sensitivity.
 New-Item -ItemType Directory -Force -Path $ProgramData | Out-Null
 $previous = $null
@@ -88,6 +79,16 @@ $config = [ordered]@{
 }
 $config | ConvertTo-Json -Depth 3 | Set-Content -Path $configFile -Encoding UTF8
 Write-Host "Configuración escrita: $configFile (cuenta $env:USERNAME, cámara $cameraIndex, sensibilidad $sensitivity)"
+
+# The first face, with the camera just configured. Its name is the one in the
+# greeting ("Hola, <nombre>").
+$faces = @(& python -m visionauth.cli --data-dir $dataDir faces list)
+if ($faces.Count -eq 0) {
+    Write-Host "Todavía no hay ninguna cara registrada. Vamos a registrar la tuya."
+    $name = Read-Host "Nombre para el saludo (por ejemplo, tu nombre de pila)"
+    & python -m visionauth.cli --data-dir $dataDir faces add $name
+    if ($LASTEXITCODE -ne 0) { throw "No se registró ninguna cara. Volvé a correr el instalador para intentarlo." }
+}
 
 # 2. Service
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue

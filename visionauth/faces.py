@@ -81,7 +81,8 @@ def list_faces(data_dir: str) -> list[FaceInfo]:
 
 
 def _existing_folder(data_dir: str, name: str) -> str:
-    folder = os.path.join(_users_dir(data_dir), name)
+    # A valid name has no path separators, so it cannot reach outside users\
+    folder = os.path.join(_users_dir(data_dir), validate_face_name(name))
     if not os.path.isfile(os.path.join(folder, "profile.json")):
         raise FaceNotFound(f"No hay ninguna cara registrada como '{name}'.")
     return folder
