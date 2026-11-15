@@ -85,8 +85,8 @@ En este orden, porque el primer paso puede cambiar el diseño del resto:
        la sesión del usuario recibe frames y detecta la cara con la pantalla
        bloqueada, también si abre la cámara después de bloquear (D11).
        Desde SYSTEM también funciona, y al prender la PC Windows ya deja una
-       sesión bloqueada (D12). Scripts: `scripts/lock_screen_camera_probe.py`,
-       `scripts/boot_camera_probe.py`.
+       sesión bloqueada (D12). Scripts: `scripts/dev/lock_screen_camera_probe.py`,
+       `scripts/dev/boot_camera_probe.py`.
 2. [ ] Detectar bloqueo y desbloqueo de la sesión. Ya existe la consulta
        puntual (`integration/windows/session.py`); falta la notificación
        (`WTSRegisterSessionNotification`).

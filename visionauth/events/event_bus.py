@@ -126,7 +126,7 @@ if __name__ == "__main__":
     bus.subscribe(EventType.AUTH_SUCCESS, handle_auth_success)
 
     # Emit
-    bus.emit(EventType.AUTH_SUCCESS, {"user": "Joaquin"})
+    bus.emit(EventType.AUTH_SUCCESS, {"user": "Ana"})
 
     # Unsubscribe
     bus.unsubscribe(EventType.AUTH_SUCCESS, handle_auth_success)

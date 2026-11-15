@@ -7,7 +7,7 @@ period it releases the camera and opens it again, because the resident
 service will only turn the camera on once the session is already locked.
 
 Usage:
-    python scripts/lock_screen_camera_probe.py
+    python scripts/dev/lock_screen_camera_probe.py
 
 Then stay in front of the camera until the screen locks, wait about a
 minute, and unlock with your password. The result is printed and saved to
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import cv2
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from integration.windows.session import session_locked  # noqa: E402

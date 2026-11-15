@@ -125,7 +125,7 @@ static int RenderSheet(IWICImagingFactory* wic, ID2D1Factory* factory, const wch
 
         // Simulate the sequence up to this moment at 120 Hz
         IslandRenderer renderer;
-        renderer.SetName(L"Joaquin");
+        renderer.SetName(L"Ana");
         renderer.SetVisible(true);
         int next = 0;
         const int steps = static_cast<int>(moments[f] * 120);

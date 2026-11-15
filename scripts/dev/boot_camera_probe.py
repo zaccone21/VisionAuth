@@ -7,7 +7,7 @@ brightness and how many faces were detected. Each line is flushed right away,
 so the log survives a reboot or a killed task.
 
 Usage (normally run by the scheduled task):
-    python scripts/boot_camera_probe.py --site <user site-packages> --seconds 300
+    python scripts/dev/boot_camera_probe.py --site <user site-packages> --seconds 300
 """
 
 import argparse
@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE = Path(r"C:\ProgramData\VisionAuth\boot_camera_probe.log")
 
 

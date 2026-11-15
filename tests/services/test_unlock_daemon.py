@@ -25,11 +25,11 @@ def test_status_reply_reports_phase() -> None:
 @pytest.mark.parametrize(
     "user, locked, account, waiting",
     [
-        (None, False, "joaqu", True),
+        (None, False, "maria", True),
         (None, False, None, False),
-        ("JOAQU", True, "joaqu", True),
-        ("otro", True, "joaqu", False),
-        ("joaqu", False, "joaqu", False),
+        ("MARIA", True, "maria", True),
+        ("otro", True, "maria", False),
+        ("maria", False, "maria", False),
     ],
 )
 def test_console_waiting(monkeypatch, user, locked, account, waiting) -> None:

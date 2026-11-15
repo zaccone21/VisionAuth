@@ -926,7 +926,7 @@ def test_enrollment_append_adds_to_existing_profile(tmp_path: pytest.TempPathFac
     assert len(UserPersistence(data_dir=data_dir).load_user_profile("repeat_user")["embeddings"]) == 4
 
 
-@pytest.mark.parametrize("name", ["Joaquín", "José María"])
+@pytest.mark.parametrize("name", ["Martín", "José María"])
 def test_enrollment_accepts_accented_name(name: str) -> None:
     """Face names are shown in the greeting, so accents and spaces are allowed."""
     service = EnrollmentService(MagicMock(spec=Camera), MagicMock(spec=Recognition), MagicMock(spec=EventBus))

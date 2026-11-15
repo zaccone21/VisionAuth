@@ -139,7 +139,7 @@ desbloquee la PC. La contraseña de Windows sigue funcionando como alternativa.
 
 ## D11. La cámara funciona con la sesión bloqueada desde la sesión del usuario
 
-**Resultado.** El 2026-11-14, `scripts/lock_screen_camera_probe.py` bloqueó la
+**Resultado.** El 2026-11-14, `scripts/dev/lock_screen_camera_probe.py` bloqueó la
 sesión y siguió leyendo la webcam desde un proceso común de la sesión del
 usuario: recibió frames y detectó la cara durante todo el bloqueo, también
 tras cerrar y volver a abrir la cámara con la pantalla de contraseña visible.
@@ -160,7 +160,7 @@ tras cerrar y volver a abrir la cámara con la pantalla de contraseña visible.
 
 ## D12. Al prender la PC, Windows inicia la sesión solo y la bloquea
 
-**Resultado.** El 2026-11-14 se probó con `scripts/boot_camera_probe.py` como
+**Resultado.** El 2026-11-14 se probó con `scripts/dev/boot_camera_probe.py` como
 tarea de SYSTEM al arrancar. En dos reinicios y en un arranque en frío
 (apagar y prender, tipo de arranque `0x0`), Windows inició la sesión del
 usuario sin el PIN unos 14 a 16 segundos después de arrancar y la dejó

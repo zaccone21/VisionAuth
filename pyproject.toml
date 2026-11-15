@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "visionauth"
 version = "0.1.0"
-description = "Modular presence-based authentication framework."
+description = "Desbloqueo de Windows con la cara usando una webcam común."
 requires-python = ">=3.12"
 dependencies = [
     "opencv-python>=4.9.0",

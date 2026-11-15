@@ -21,7 +21,7 @@ WINDOW_NAME = "VisionAuth - Probar reconocimiento (Q para salir)"
 
 
 def _ascii(text: str) -> str:
-    """OpenCV's fonts only draw ASCII: "Joaquín" becomes "Joaquin"."""
+    """OpenCV's fonts only draw ASCII: "Martín" becomes "Martin"."""
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
 
 

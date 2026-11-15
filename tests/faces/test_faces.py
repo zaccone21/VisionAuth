@@ -43,13 +43,13 @@ def test_validate_rejects(name: str) -> None:
 
 
 def test_list_faces_reports_samples_and_skips_folders_without_profile(tmp_path) -> None:
-    make_face(tmp_path, "Joaquín")
+    make_face(tmp_path, "Martín")
     make_face(tmp_path, "Ana")
     (tmp_path / "users" / "vacía").mkdir()
 
     assert list_faces(str(tmp_path)) == [
         FaceInfo("Ana", 8, "2026-11-14T10:00:00"),
-        FaceInfo("Joaquín", 8, "2026-11-14T10:00:00"),
+        FaceInfo("Martín", 8, "2026-11-14T10:00:00"),
     ]
 
 
@@ -58,27 +58,27 @@ def test_list_faces_without_users_folder_is_empty(tmp_path) -> None:
 
 
 def test_rename_updates_folder_and_profile_user(tmp_path) -> None:
-    make_face(tmp_path, "Zaccone")
-    rename_face(str(tmp_path), "Zaccone", "Joaquín")
+    make_face(tmp_path, "Gomez")
+    rename_face(str(tmp_path), "Gomez", "Martín")
 
-    profile = json.loads((tmp_path / "users" / "Joaquín" / "profile.json").read_text(encoding="utf-8"))
-    metadata = json.loads((tmp_path / "users" / "Joaquín" / "metadata.json").read_text(encoding="utf-8"))
-    assert profile["user"] == "Joaquín"
-    assert metadata["user"] == "Joaquín"
-    assert not (tmp_path / "users" / "Zaccone").exists()
+    profile = json.loads((tmp_path / "users" / "Martín" / "profile.json").read_text(encoding="utf-8"))
+    metadata = json.loads((tmp_path / "users" / "Martín" / "metadata.json").read_text(encoding="utf-8"))
+    assert profile["user"] == "Martín"
+    assert metadata["user"] == "Martín"
+    assert not (tmp_path / "users" / "Gomez").exists()
 
 
 def test_rename_case_only_is_allowed(tmp_path) -> None:
-    make_face(tmp_path, "joaquín")
-    rename_face(str(tmp_path), "joaquín", "Joaquín")
-    assert [face.name for face in list_faces(str(tmp_path))] == ["Joaquín"]
+    make_face(tmp_path, "martín")
+    rename_face(str(tmp_path), "martín", "Martín")
+    assert [face.name for face in list_faces(str(tmp_path))] == ["Martín"]
 
 
 def test_rename_to_existing_face_fails(tmp_path) -> None:
     make_face(tmp_path, "Ana")
-    make_face(tmp_path, "Joaquín")
+    make_face(tmp_path, "Martín")
     with pytest.raises(FaceExists):
-        rename_face(str(tmp_path), "Ana", "Joaquín")
+        rename_face(str(tmp_path), "Ana", "Martín")
 
 
 def test_rename_or_remove_missing_face_fails(tmp_path) -> None:

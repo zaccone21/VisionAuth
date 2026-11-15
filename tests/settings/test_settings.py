@@ -16,8 +16,8 @@ from visionauth.settings import (
 
 def test_load_config_reads_powershell_bom(tmp_path) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"account": "joaqu", "camera": 0}), encoding="utf-8-sig")
-    assert load_config(path) == {"account": "joaqu", "camera": 0}
+    path.write_text(json.dumps({"account": "maria", "camera": 0}), encoding="utf-8-sig")
+    assert load_config(path) == {"account": "maria", "camera": 0}
 
 
 def test_load_missing_config_is_empty(tmp_path) -> None:
@@ -26,14 +26,14 @@ def test_load_missing_config_is_empty(tmp_path) -> None:
 
 def test_save_then_load_round_trips_accents(tmp_path) -> None:
     path = tmp_path / "config.json"
-    save_config(path, {"account": "joaqu", "x": "Joaquín"})
+    save_config(path, {"account": "maria", "x": "Martín"})
     assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
-    assert load_config(path) == {"account": "joaqu", "x": "Joaquín"}
+    assert load_config(path) == {"account": "maria", "x": "Martín"}
 
 
 @pytest.mark.parametrize(
     "config, account",
-    [({"account": "joaqu"}, "joaqu"), ({"profiles": {"joaqu": "Zaccone"}}, "joaqu"), ({}, None)],
+    [({"account": "maria"}, "maria"), ({"profiles": {"maria": "Gomez"}}, "maria"), ({}, None)],
 )
 def test_configured_account_new_and_old_formats(config: dict, account: str | None) -> None:
     assert configured_account(config) == account

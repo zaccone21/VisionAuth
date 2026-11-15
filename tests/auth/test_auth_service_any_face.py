@@ -68,19 +68,19 @@ def make_service(profiles: dict[str, dict | None]) -> AuthService:
 
 
 def test_matches_the_closest_face() -> None:
-    service = make_service({"Ana": profile("Ana", axis(1)), "Joaquín": profile("Joaquín", axis(0))})
-    result = service.authenticate_any(["Ana", "Joaquín"])
+    service = make_service({"Ana": profile("Ana", axis(1)), "Martín": profile("Martín", axis(0))})
+    result = service.authenticate_any(["Ana", "Martín"])
     assert result.success
-    assert result.user == "Joaquín"
+    assert result.user == "Martín"
 
 
 def test_missing_or_incompatible_face_is_skipped() -> None:
     service = make_service(
-        {"Vieja": profile("Vieja", axis(0), model="old-model"), "Joaquín": profile("Joaquín", axis(0))}
+        {"Vieja": profile("Vieja", axis(0), model="old-model"), "Martín": profile("Martín", axis(0))}
     )
-    result = service.authenticate_any(["Borrada", "Vieja", "Joaquín"])
+    result = service.authenticate_any(["Borrada", "Vieja", "Martín"])
     assert result.success
-    assert result.user == "Joaquín"
+    assert result.user == "Martín"
 
 
 def test_no_usable_face_fails_without_camera() -> None:
