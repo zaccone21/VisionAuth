@@ -22,6 +22,7 @@ enum IslandPhase : LONG {
     ISLAND_UNRECOGNIZED,
     ISLAND_MATCH,
     ISLAND_BLOCKED,
+    ISLAND_AWAY,  // nobody in view for a while: greyed out until someone sits down
 };
 
 class IslandRenderer {

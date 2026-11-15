@@ -22,6 +22,7 @@ struct Rgb {
 };
 const Rgb kCream = {0.961f, 0.953f, 0.925f};
 const Rgb kWarmGray = {0.651f, 0.631f, 0.596f};
+const Rgb kDimGray = {0.455f, 0.443f, 0.42f};
 const Rgb kCoral = {0.851f, 0.467f, 0.341f};
 const Rgb kAmber = {0.961f, 0.643f, 0.231f};
 const Rgb kGreen = {0.188f, 0.820f, 0.345f};
@@ -34,6 +35,7 @@ Rgb PhaseAccent(LONG phase) {
         case ISLAND_FACE: return kAmber;
         case ISLAND_UNRECOGNIZED: return kRed;
         case ISLAND_MATCH: return kGreen;
+        case ISLAND_AWAY: return kDimGray;
         default: return kRed;
     }
 }
@@ -150,8 +152,8 @@ void DrawFace(ID2D1RenderTarget* target, ID2D1Factory* factory, ID2D1StrokeStyle
         sink->AddLine({fx + size * 0.02f, fy + size * 0.045f});
         sink->AddLine({fx - size * 0.045f, fy + size * 0.045f});
         sink->EndFigure(D2D1_FIGURE_END_OPEN);
-        // Mouth
-        float mouthY = fy + size * 0.165f;
+        // Mouth: a frown hangs from the line instead of rising toward the nose
+        float mouthY = fy + size * (0.165f + (mouth < 0 ? -mouth * 0.065f : 0));
         sink->BeginFigure({fx - size * 0.155f, mouthY}, D2D1_FIGURE_BEGIN_HOLLOW);
         sink->AddQuadraticBezier(
             D2D1::QuadraticBezierSegment({fx, mouthY + size * 0.13f * mouth}, {fx + size * 0.155f, mouthY}));
@@ -219,6 +221,7 @@ struct IslandRenderer::Impl {
             case ISLAND_FACE: text = L"Verificando…"; break;
             case ISLAND_UNRECOGNIZED: text = L"No te reconozco"; break;
             case ISLAND_BLOCKED: text = L"Entrá con tu PIN"; break;
+            case ISLAND_AWAY: text = L"En espera"; break;
             case ISLAND_MATCH:
                 if (name[0]) {
                     swprintf(out, capacity, L"Hola, %ls", name);
@@ -498,6 +501,11 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
             case ISLAND_FACE: mouth = 1; break;
             case ISLAND_UNRECOGNIZED: mouth = -0.85f; break;
             case ISLAND_MATCH: mouth = 1; break;
+            case ISLAND_AWAY:
+                // Greyed out and still, like a disabled control
+                mouth = 0;
+                faceAlphaScale = 0.75f;
+                break;
             default: mouth = -0.6f; break;
         }
         float size = glyph * breathe * (1 - 0.3f * successAmount);
@@ -545,11 +553,13 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     float textX = gx + glyph / 2 + kTextGap * scale;
     float in = Clamp01(s.textIn.x);
     float labelH = labelMetrics.height;
-    auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, float opacity, float dy) {
+    auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, LONG forPhase, float opacity,
+                          float dy) {
         if (!layout || opacity <= 0.01f) return;
+        bool away = forPhase == ISLAND_AWAY;
         float blockH = labelH + kLineGap * scale + metrics.height;
         float y = gy - blockH / 2 + labelH + kLineGap * scale + dy;
-        brush->SetColor(ColorOf(kCream, opacity));
+        brush->SetColor(ColorOf(away ? kDimGray : kCream, opacity));
         target->DrawTextLayout({textX, y}, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
     if (labelLayout) {
@@ -559,8 +569,8 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     }
     // One after the other, never on top of each other: the old text leaves in
     // the first part of the transition, the new one arrives after it
-    drawStatus(previous, previousMetrics, content * (1 - Clamp01(in * 2.4)), -10 * scale * in);
-    drawStatus(current, currentMetrics, content * Clamp01((in - 0.32) / 0.68), 10 * scale * (1 - in));
+    drawStatus(previous, previousMetrics, s.previousPhase, content * (1 - Clamp01(in * 2.4)), -10 * scale * in);
+    drawStatus(current, currentMetrics, s.phase, content * Clamp01((in - 0.32) / 0.68), 10 * scale * (1 - in));
 
     if (clip && layer) target->PopLayer();
     SafeRelease(layer);

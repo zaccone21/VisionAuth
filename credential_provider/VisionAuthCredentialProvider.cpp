@@ -22,6 +22,8 @@
 #include <initguid.h>
 #include <credentialprovider.h>
 #include <ntsecapi.h>
+#include <powersetting.h>
+#include <powrprof.h>
 #include <security.h>
 #include <shlguid.h>
 #include <shlwapi.h>
@@ -49,6 +51,13 @@ static const DWORD kPollIntervalMs = 200;
 static const UINT WM_VISIONAUTH_PHASE = WM_APP + 1;
 static const UINT_PTR kLogonTimer = 7;
 static const UINT kMatchDelayMs = 450;
+static const UINT kDisplayRecheckMs = 100;
+// After the PC wakes up or the screen turns on, an external monitor takes a
+// few seconds to show the picture. A verified face waits this long after
+// either, so the sign-in screen is seen before it goes away. It can be
+// changed with the DWORD DisplaySettleMs under HKLM\SOFTWARE\VisionAuth.
+static const DWORD kDefaultDisplaySettleMs = 4000;
+static const wchar_t kSettingsKey[] = L"SOFTWARE\\VisionAuth";
 static const wchar_t kWindowClass[] = L"VisionAuthCredentialProviderWindow";
 
 static LONG g_dllRefs = 0;
@@ -85,6 +94,7 @@ enum Phase : LONG {
     PH_FACE,          // a face is in view, verifying
     PH_UNRECOGNIZED,  // a face was in view but did not match
     PH_MATCH,         // verified: logging on
+    PH_AWAY = 7,      // nobody in view for a while: waiting, greyed out (6 is the island's "blocked")
 };
 
 struct SharedState {
@@ -138,6 +148,7 @@ static Phase ParseReply(const char* reply) {
     if (strncmp(phase, "starting", 8) == 0) return PH_STARTING;
     if (strncmp(phase, "face", 4) == 0 || strncmp(phase, "verified", 8) == 0) return PH_FACE;
     if (strncmp(phase, "unrecognized", 12) == 0) return PH_UNRECOGNIZED;
+    if (strncmp(phase, "away", 4) == 0) return PH_AWAY;
     return PH_SEARCHING;
 }
 
@@ -301,6 +312,7 @@ static const wchar_t* PhaseText(LONG phase, bool blocked) {
         case PH_FACE: return L"Verificando…";
         case PH_UNRECOGNIZED: return L"No te reconozco. Probá de nuevo o usá tu PIN.";
         case PH_MATCH: return L"¡Hola! Entrando…";
+        case PH_AWAY: return L"En espera";
         default: return L"Mirá a la cámara";
     }
 }
@@ -468,12 +480,89 @@ class Credential final : public ICredentialProviderCredential2 {
 };
 
 // ---------------------------------------------------------------------------
+// Whether the screen can be seen
+
+#ifndef DEVICE_NOTIFY_CALLBACK
+// From the Windows SDK; the MinGW headers leave them out
+#define DEVICE_NOTIFY_CALLBACK 2
+typedef ULONG CALLBACK DEVICE_NOTIFY_CALLBACK_ROUTINE(PVOID context, ULONG type, PVOID setting);
+struct DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+    DEVICE_NOTIFY_CALLBACK_ROUTINE* Callback;
+    PVOID Context;
+};
+#endif
+
+// Times are in milliseconds of GetTickCount64, which keeps counting during
+// sleep, like the interrupt time the system gives for the last wake (in
+// 100 ns units).
+static ULONGLONG LastWakeTickMs() {
+    ULONGLONG wake = 0;
+    if (CallNtPowerInformation(LastWakeTime, nullptr, 0, &wake, sizeof(wake)) != 0) return 0;
+    return wake / 10000;
+}
+
+class DisplayWatch {
+  public:
+    void Start() {
+        DWORD value = 0, size = sizeof(value);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, kSettingsKey, L"DisplaySettleMs", RRF_RT_REG_DWORD, nullptr, &value,
+                         &size) == ERROR_SUCCESS) {
+            settle_ = value;
+        }
+        // Windows reports the current state right away, then every change
+        DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS parameters = {&OnChange, this};
+        if (PowerSettingRegisterNotification(&GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_CALLBACK, &parameters,
+                                             &registration_) != ERROR_SUCCESS) {
+            registration_ = nullptr;
+        }
+    }
+
+    void Stop() {
+        if (registration_) PowerSettingUnregisterNotification(registration_);
+        registration_ = nullptr;
+    }
+
+    // True once the screen has been on for the settle time, counted from when
+    // it turned on or the PC woke up, whichever was last.
+    bool Ready() const {
+        if (!on_) return false;
+        ULONGLONG since = static_cast<ULONGLONG>(onSince_);
+        ULONGLONG wake = LastWakeTickMs();
+        if (wake > since) since = wake;
+        ULONGLONG now = GetTickCount64();
+        return now < since || now - since >= settle_;
+    }
+
+  private:
+    static ULONG CALLBACK OnChange(PVOID context, ULONG type, PVOID setting) {
+        auto* self = static_cast<DisplayWatch*>(context);
+        auto* change = static_cast<POWERBROADCAST_SETTING*>(setting);
+        if (type != PBT_POWERSETTINGCHANGE || !change || change->DataLength < sizeof(DWORD)) return ERROR_SUCCESS;
+        // 0 off, 1 on, 2 dimmed (still visible)
+        bool on = *reinterpret_cast<DWORD*>(change->Data) != 0;
+        // A first report of "on" says nothing about when it turned on: the
+        // wake time covers the PC coming back from sleep
+        if (on && !self->on_) InterlockedExchange64(&self->onSince_, static_cast<LONG64>(GetTickCount64()));
+        InterlockedExchange(&self->on_, on ? 1 : 0);
+        return ERROR_SUCCESS;
+    }
+
+    HPOWERNOTIFY registration_ = nullptr;
+    ULONGLONG settle_ = kDefaultDisplaySettleMs;
+    volatile LONG on_ = 1;  // assumed on until Windows reports otherwise
+    volatile LONG64 onSince_ = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Provider
 
 class Provider final : public ICredentialProvider {
   public:
     Provider() {
         DllAddRef();
+        // Started early, so a lock right before sleep still sees the screen
+        // turn back on
+        display_.Start();
     }
 
     // IUnknown
@@ -563,6 +652,7 @@ class Provider final : public ICredentialProvider {
 
   private:
     ~Provider() {
+        display_.Stop();
         StopPolling();
         island_.Destroy();
         DestroyMessageWindow();
@@ -643,6 +733,11 @@ class Provider final : public ICredentialProvider {
     }
 
     void OnLogonTimer() {
+        if (!display_.Ready()) {
+            // Keep the check mark up until the screen shows it
+            SetTimer(window_, kLogonTimer, kDisplayRecheckMs, nullptr);
+            return;
+        }
         KillTimer(window_, kLogonTimer);
         if (events_) events_->CredentialsChanged(context_);
     }
@@ -689,6 +784,7 @@ class Provider final : public ICredentialProvider {
     HANDLE stop_ = nullptr;
     HWND window_ = nullptr;
     IslandWindow island_;
+    DisplayWatch display_;
 };
 
 // ---------------------------------------------------------------------------

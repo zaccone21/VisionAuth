@@ -7,7 +7,7 @@ if ! command -v g++ >/dev/null 2>&1; then
     PATH="$(ls -d "$LOCALAPPDATA"/Microsoft/WinGet/Packages/BrechtSanders.WinLibs*/mingw64/bin 2>/dev/null | head -1):$PATH"
 fi
 FLAGS="-std=c++17 -O2 -Wall -Wextra -fno-exceptions -static -static-libgcc -static-libstdc++ -DUNICODE -D_UNICODE"
-LIBS="-lole32 -luuid -lsecur32 -ladvapi32 -lshlwapi -lgdi32 -ld2d1 -ldwrite -ldwmapi"
+LIBS="-lole32 -luuid -lsecur32 -ladvapi32 -lshlwapi -lgdi32 -ld2d1 -ldwrite -ldwmapi -lpowrprof"
 mkdir -p build
 g++ $FLAGS -shared -o build/VisionAuthCredentialProvider.dll VisionAuthCredentialProvider.cpp island.cpp VisionAuthCredentialProvider.def $LIBS
 g++ $FLAGS -municode -o build/island_preview.exe island_preview.cpp island.cpp $LIBS -lwindowscodecs

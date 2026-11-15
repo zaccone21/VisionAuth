@@ -6,7 +6,7 @@ import numpy as np
 
 from visionauth.auth.auth_service import AuthResult
 from visionauth.camera.camera import Camera, CameraError
-from visionauth.service.unlock_service import HeldCamera, UnlockService
+from visionauth.service.unlock_service import AWAY_SECONDS, HeldCamera, UnlockService
 
 SUCCESS = AuthResult(success=True, reason="success", confidence=0.8, user="owner")
 NO_FACE = AuthResult(success=False, reason="timeout", confidence=0.0, user=None)
@@ -157,3 +157,27 @@ def test_phase_follows_the_session_and_the_face() -> None:
     assert service.phase == "verified"
     service.take_verification()
     assert service.phase == "face"
+
+
+def test_phase_goes_away_after_a_while_without_a_face_and_back_on_one() -> None:
+    clock = Clock()
+    service, state = make_service([True], [NO_FACE] * 4, clock=clock)
+    service.step()
+    # Right after the lock it looks for a face at once
+    assert service.phase == "searching"
+    clock.now += AWAY_SECONDS - 1
+    assert service.phase == "searching"
+    clock.now += 2
+    assert service.phase == "away"
+
+    service.note_face()
+    assert service.phase == "face"
+    clock.now += AWAY_SECONDS + 1
+    assert service.phase == "away"
+
+    # A new lock starts searching again, without waiting
+    state["locked"] = [False]
+    service.step()
+    state["locked"] = [True]
+    service.step()
+    assert service.phase == "searching"

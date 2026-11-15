@@ -5,8 +5,9 @@ camera open and runs authentication attempts; a successful one leaves a
 short-lived verification that the sign-in screen component takes, once, to
 unlock the session. While the session is unlocked the camera stays closed.
 
-It also reports a phase (camera starting, searching, face in view, face not
-recognized, verified) that the sign-in screen shows to the user.
+It also reports a phase (camera starting, searching, nobody in view for a
+while, face in view, face not recognized, verified) that the sign-in screen
+shows to the user.
 
 Nothing here touches the Windows API: the session state, the camera and the
 authentication are injected, so the logic is testable on its own.
@@ -31,12 +32,16 @@ CONFIGURATION_FAILURES = ("user_not_found", "incompatible_profile", "invalid_pro
 PHASE_IDLE = "idle"
 PHASE_STARTING = "starting"
 PHASE_SEARCHING = "searching"
+PHASE_AWAY = "away"
 PHASE_FACE = "face"
 PHASE_UNRECOGNIZED = "unrecognized"
 PHASE_VERIFIED = "verified"
 
 FACE_RECENT_SECONDS = 1.0
 UNRECOGNIZED_SECONDS = 3.0
+# Without a face for this long, the sign-in screen stops asking for one and
+# waits, greyed out, until someone sits down. Detection keeps running.
+AWAY_SECONDS = 10.0
 
 
 class HeldCamera:
@@ -121,6 +126,7 @@ class UnlockService:
         self._verified_user: str | None = None
         self._locked = False
         self._last_face: float | None = None
+        self._watch_started: float | None = None
         self._unrecognized_until: float | None = None
 
     def note_face(self) -> None:
@@ -141,6 +147,11 @@ class UnlockService:
             return PHASE_UNRECOGNIZED
         if self._last_face is not None and now - self._last_face <= FACE_RECENT_SECONDS:
             return PHASE_FACE
+        if self._watch_started is not None:
+            # Counted from the lock or the last face, whichever was later
+            seen = max(self._watch_started, self._last_face or self._watch_started)
+            if now - seen > AWAY_SECONDS:
+                return PHASE_AWAY
         return PHASE_SEARCHING
 
     def take_verification(self) -> str | None:
@@ -176,6 +187,7 @@ class UnlockService:
                 self.camera.stop()
             self._clear_verification()
             self._last_face = None
+            self._watch_started = None
             self._unrecognized_until = None
             self.sleep(self.idle_poll)
             return
@@ -191,6 +203,7 @@ class UnlockService:
                 started = self.clock()
                 self.camera.start()
                 logger.info("Camera open in %.2f s.", self.clock() - started)
+                self._watch_started = self.clock()
             except CameraError as e:
                 logger.error("Could not open the camera: %s", e)
                 self.sleep(self.configuration_pause)

@@ -273,3 +273,26 @@ previa y una vez la DLL de prueba). Antes de instalar una DLL nueva hay que
 comprobar que Windows la deja cargar; si alguna vez la bloquea, VisionAuth
 no aparece y se entra con el PIN.
 
+
+## D17. Esperar a que se vea la pantalla y quedar en espera sin nadie enfrente
+
+**Contexto.** Al volver del reposo, el servicio reconocía al dueño y
+desbloqueaba unos 3 s después del despertar, antes de que el monitor externo
+mostrara imagen: la PC parecía no haberse bloqueado nunca. Para Windows la
+pantalla está "encendida" desde el instante en que despierta, pero el
+monitor tarda varios segundos en mostrar la imagen.
+
+**Decisión.**
+- El Credential Provider no entra hasta que la pantalla lleva encendida 4 s
+  (`DisplaySettleMs`, DWORD en `HKLM\SOFTWARE\VisionAuth`), contados desde el
+  último despertar del sistema (`CallNtPowerInformation(LastWakeTime)`) o
+  desde que la pantalla se encendió (`GUID_CONSOLE_DISPLAY_STATE`), lo que
+  haya pasado último. Mientras tanto la isla muestra el check y el saludo.
+  Con un bloqueo normal (Win+L) no agrega demora.
+- Los tiempos se miden con `GetTickCount64`, que sigue contando durante el
+  reposo como el reloj de `LastWakeTime`. Resolver `QueryInterruptTime` con
+  `GetProcAddress` hizo que Smart App Control bloqueara la DLL.
+- Si nadie aparece frente a la cámara durante 10 s desde el bloqueo o desde
+  la última cara, el servicio informa la fase `away` y la isla queda gris,
+  quieta y dice "En espera". La detección sigue corriendo: apenas aparece una
+  cara pasa a "Verificando…". Recién bloqueada, busca al instante.
