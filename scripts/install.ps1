@@ -4,9 +4,12 @@
 
 .DESCRIPTION
     Run from PowerShell as administrator, signed in as the user to unlock:
-        .\scripts\install.ps1 -ProfileName <VisionAuth profile name>
+        .\scripts\install.ps1 [-SkipLockScreen] [-Camera <index>]
 
-    1. Writes C:\ProgramData\VisionAuth\config.json.
+    0. Checks the Python dependencies and, if no face is enrolled yet, opens
+       the enrollment window for the first one.
+    1. Writes C:\ProgramData\VisionAuth\config.json. The account to unlock is
+       the one running this script; a reinstall keeps the camera and sensitivity.
     2. Registers and starts the "VisionAuth" service (SYSTEM, automatic start).
     3. Copies the credential provider to C:\Program Files\VisionAuth and registers it.
     4. Asks for the account password if none is stored yet (scripts\set_password.py).
@@ -15,12 +18,9 @@
     Undo everything with scripts\uninstall.ps1.
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$ProfileName,
     [int]$Camera = 0,
     # Skip the clock screen, so locking shows the sign-in screen and its island
-    [switch]$SkipLockScreen,
-    # Name in the greeting ("Hola, <name>"); defaults to the account's first name
-    [string]$DisplayName = ""
+    [switch]$SkipLockScreen
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,8 +38,20 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $builtDll = Join-Path $projectRoot "credential_provider\build\$DllName"
 if (-not (Test-Path $builtDll)) { throw "Falta $builtDll. Compilalo con: sh credential_provider/build.sh" }
-$profileFile = Join-Path $projectRoot "data\users\$ProfileName\profile.json"
-if (-not (Test-Path $profileFile)) { throw "No existe el perfil '$ProfileName' en data\users. Enrolate primero." }
+$dataDir = Join-Path $projectRoot "data"
+$configFile = Join-Path $ProgramData "config.json"
+
+# The command line prints face names with accents
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+Set-Location $projectRoot
+
+# PowerShell 5.1 turns a redirected stderr line into an error that "Stop" would throw
+$dependencies = $false
+try { & python -c "import cv2, mediapipe" 2>$null; $dependencies = ($LASTEXITCODE -eq 0) } catch { }
+if (-not $dependencies) {
+    throw 'Faltan las dependencias de Python. Instalalas con: python -m pip install --user -e ".[dev]"'
+}
 
 $python = (& python -c "import sys; print(sys.executable)").Trim()
 $userSite = (& python -c "import site; print(site.getusersitepackages())").Trim()
@@ -49,22 +61,33 @@ $passwordScript = Join-Path $projectRoot "scripts\set_password.py"
 # The boot probe used during development would compete for the camera
 Unregister-ScheduledTask -TaskName "VisionAuthBootCameraProbe" -Confirm:$false -ErrorAction SilentlyContinue
 
-if (-not $DisplayName) {
-    $fullName = (Get-LocalUser -Name $env:USERNAME).FullName
-    $DisplayName = if ($fullName) { ($fullName -split ' ')[0] } else { $env:USERNAME }
+# 0. The first face. Its name is the one in the greeting ("Hola, <nombre>").
+$faces = @(& python -m visionauth.cli --data-dir $dataDir faces list)
+if ($faces.Count -eq 0) {
+    Write-Host "Todavía no hay ninguna cara registrada. Vamos a registrar la tuya."
+    $name = Read-Host "Nombre para el saludo (por ejemplo, tu nombre de pila)"
+    & python -m visionauth.cli --data-dir $dataDir faces add $name
+    if ($LASTEXITCODE -ne 0) { throw "No se registró ninguna cara. Volvé a correr el instalador para intentarlo." }
 }
 
-# 1. Configuration
+# 1. Configuration. A reinstall keeps the camera and the sensitivity.
 New-Item -ItemType Directory -Force -Path $ProgramData | Out-Null
-$config = [ordered]@{
-    profiles = @{ $env:USERNAME = $ProfileName }
-    site     = @($userSite)
-    data_dir = (Join-Path $projectRoot "data")
-    camera   = $Camera
-    display_name = $DisplayName
+$previous = $null
+if (Test-Path $configFile) { $previous = Get-Content -Path $configFile -Raw -Encoding UTF8 | ConvertFrom-Json }
+$cameraIndex = $Camera
+if (-not $PSBoundParameters.ContainsKey("Camera") -and $previous -and $null -ne $previous.camera) {
+    $cameraIndex = [int]$previous.camera
 }
-$config | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $ProgramData "config.json") -Encoding UTF8
-Write-Host "Configuración escrita: $ProgramData\config.json (usuario $env:USERNAME -> perfil $ProfileName)"
+$sensitivity = if ($previous -and $previous.sensitivity) { $previous.sensitivity } else { "normal" }
+$config = [ordered]@{
+    account     = $env:USERNAME
+    site        = @($userSite)
+    data_dir    = $dataDir
+    camera      = $cameraIndex
+    sensitivity = $sensitivity
+}
+$config | ConvertTo-Json -Depth 3 | Set-Content -Path $configFile -Encoding UTF8
+Write-Host "Configuración escrita: $configFile (cuenta $env:USERNAME, cámara $cameraIndex, sensibilidad $sensitivity)"
 
 # 2. Service
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -115,4 +138,5 @@ if ($check -notmatch "^Hay") {
 
 Write-Host ""
 Write-Host "Listo. Bloqueá la sesión (Win+L) y mirá a la cámara para probarlo."
+Write-Host "Para administrar caras y ajustes: .\visionauth.ps1"
 Write-Host "Log del servicio: $ProgramData\service.log"

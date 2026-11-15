@@ -32,6 +32,8 @@ Write-Host "Credential provider quitado."
 
 # Bring the clock screen back if install.ps1 -SkipLockScreen removed it
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" -Name "NoLockScreen" -ErrorAction SilentlyContinue
+# Settings the menu writes for the credential provider (DisplaySettleMs)
+Remove-Item -Path "HKLM:\SOFTWARE\VisionAuth" -Recurse -Force -ErrorAction SilentlyContinue
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
