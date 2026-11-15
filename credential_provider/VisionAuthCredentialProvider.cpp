@@ -312,7 +312,7 @@ static const wchar_t* PhaseText(LONG phase, bool blocked) {
         case PH_FACE: return L"Verificando…";
         case PH_UNRECOGNIZED: return L"No te reconozco. Probá de nuevo o usá tu PIN.";
         case PH_MATCH: return L"¡Hola! Entrando…";
-        case PH_AWAY: return L"En espera";
+        case PH_AWAY: return L"";  // the tile already says VisionAuth
         default: return L"Mirá a la cámara";
     }
 }

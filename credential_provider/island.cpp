@@ -57,6 +57,9 @@ const float kSuccessGlyph = 64.0f;
 const float kTextGap = 18.0f;
 const float kPadRight = 40.0f;
 const float kLineGap = 3.0f;  // between the label and the status line
+// Waiting with nobody in view, the label grows into the only line
+const float kBrandScale = 1.85f;
+const Rgb kBrandGray = {0.56f, 0.548f, 0.525f};
 const float kTopMargin = 22.0f;
 
 float Clamp01(double x) { return static_cast<float>(x < 0 ? 0 : (x > 1 ? 1 : x)); }
@@ -179,6 +182,7 @@ struct IslandRenderer::Impl {
 
     Spring presence;  // 0 hidden .. 1 shown (overshoots a little)
     Spring width, height, shake, glow, textIn, success;
+    Spring brand;  // 0 small label above the status .. 1 large and alone
     Spring r, g, b;
     bool sized = false;
 
@@ -221,7 +225,7 @@ struct IslandRenderer::Impl {
             case ISLAND_FACE: text = L"Verificando…"; break;
             case ISLAND_UNRECOGNIZED: text = L"No te reconozco"; break;
             case ISLAND_BLOCKED: text = L"Entrá con tu PIN"; break;
-            case ISLAND_AWAY: text = L"En espera"; break;
+            case ISLAND_AWAY: text = L""; break;  // the label takes the line
             case ISLAND_MATCH:
                 if (name[0]) {
                     swprintf(out, capacity, L"Hola, %ls", name);
@@ -278,6 +282,7 @@ void IslandRenderer::SetPhase(LONG phase) {
     s.success.target = phase == ISLAND_MATCH ? 1 : 0;
     s.height.target = phase == ISLAND_MATCH ? kSuccessHeight : kCompactHeight;
     if (phase == ISLAND_UNRECOGNIZED) s.shake.v = 1100;  // a quick "no" shake
+    s.brand.target = phase == ISLAND_AWAY ? 1 : 0;
 }
 
 void IslandRenderer::SetVisible(bool visible) {
@@ -298,6 +303,7 @@ void IslandRenderer::Advance(double dt) {
     s.glow.Step(dt, 110, 22);
     s.textIn.Step(dt, 240, 31);
     s.success.Step(dt, 260, 19);
+    s.brand.Step(dt, 170, 24);
     s.r.Step(dt, 150, 25);
     s.g.Step(dt, 150, 25);
     s.b.Step(dt, 150, 25);
@@ -322,10 +328,16 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     // Measure the texts to size the pill
     IDWriteTextLayout* labelLayout = nullptr;
     WriteFactory()->CreateTextLayout(L"VisionAuth", 10, s.label, 2000, 200, &labelLayout);
+    IDWriteTextLayout* lineLayout = nullptr;
+    WriteFactory()->CreateTextLayout(L"VisionAuth", 10, s.status, 2000, 200, &lineLayout);
     IDWriteTextLayout* current = s.Layout(s.phase);
     IDWriteTextLayout* previous = s.previousPhase != s.phase ? s.Layout(s.previousPhase) : nullptr;
-    DWRITE_TEXT_METRICS labelMetrics = {}, currentMetrics = {}, previousMetrics = {};
+    DWRITE_TEXT_METRICS labelMetrics = {}, currentMetrics = {}, previousMetrics = {}, lineMetrics = {};
     if (labelLayout) labelLayout->GetMetrics(&labelMetrics);
+    if (lineLayout) lineLayout->GetMetrics(&lineMetrics);
+    SafeRelease(lineLayout);
+    bool away = s.phase == ISLAND_AWAY;
+    if (away) currentMetrics.height = lineMetrics.height;
     if (current) current->GetMetrics(&currentMetrics);
     if (previous) previous->GetMetrics(&previousMetrics);
 
@@ -333,9 +345,10 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     float compactHeight = static_cast<float>(s.height.x);
     float glyphUnscaled = kGlyph + (kSuccessGlyph - kGlyph) * successAmount;
     float inset = (compactHeight - glyphUnscaled) / 2;
-    float textWidth = (currentMetrics.widthIncludingTrailingWhitespace > labelMetrics.width
+    float labelWidth = labelMetrics.width * (away ? kBrandScale : 1);
+    float textWidth = (currentMetrics.widthIncludingTrailingWhitespace > labelWidth
                            ? currentMetrics.widthIncludingTrailingWhitespace
-                           : labelMetrics.width) /
+                           : labelWidth) /
                       scale;
     float targetWidth = inset + glyphUnscaled + kTextGap + textWidth + kPadRight;
     if (!s.sized) {
@@ -553,24 +566,33 @@ void IslandRenderer::Draw(ID2D1RenderTarget* target, float areaWidth, float, flo
     float textX = gx + glyph / 2 + kTextGap * scale;
     float in = Clamp01(s.textIn.x);
     float labelH = labelMetrics.height;
-    auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, LONG forPhase, float opacity,
-                          float dy) {
+    auto drawStatus = [&](IDWriteTextLayout* layout, const DWRITE_TEXT_METRICS& metrics, float opacity, float dy) {
         if (!layout || opacity <= 0.01f) return;
-        bool away = forPhase == ISLAND_AWAY;
         float blockH = labelH + kLineGap * scale + metrics.height;
         float y = gy - blockH / 2 + labelH + kLineGap * scale + dy;
-        brush->SetColor(ColorOf(away ? kDimGray : kCream, opacity));
+        brush->SetColor(ColorOf(kCream, opacity));
         target->DrawTextLayout({textX, y}, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
     if (labelLayout) {
+        // Above the status line, or grown and centered alone while waiting
+        float b = static_cast<float>(s.brand.x);
+        float k = 1 + (kBrandScale - 1) * b;
         float blockH = labelH + kLineGap * scale + currentMetrics.height;
-        brush->SetColor(ColorOf(kWarmGray, content));
-        target->DrawTextLayout({textX, gy - blockH / 2}, labelLayout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        float y = gy - blockH / 2 + (blockH / 2 - labelH * kBrandScale / 2) * b;
+        float g = Clamp01(b);
+        Rgb color = {kWarmGray.r + (kBrandGray.r - kWarmGray.r) * g, kWarmGray.g + (kBrandGray.g - kWarmGray.g) * g,
+                     kWarmGray.b + (kBrandGray.b - kWarmGray.b) * g};
+        brush->SetColor(ColorOf(color, content));
+        D2D1_MATRIX_3X2_F base;
+        target->GetTransform(&base);
+        target->SetTransform(D2D1::Matrix3x2F::Scale(k, k, {textX, y}) * base);
+        target->DrawTextLayout({textX, y}, labelLayout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        target->SetTransform(base);
     }
     // One after the other, never on top of each other: the old text leaves in
     // the first part of the transition, the new one arrives after it
-    drawStatus(previous, previousMetrics, s.previousPhase, content * (1 - Clamp01(in * 2.4)), -10 * scale * in);
-    drawStatus(current, currentMetrics, s.phase, content * Clamp01((in - 0.32) / 0.68), 10 * scale * (1 - in));
+    drawStatus(previous, previousMetrics, content * (1 - Clamp01(in * 2.4)), -10 * scale * in);
+    drawStatus(current, currentMetrics, content * Clamp01((in - 0.32) / 0.68), 10 * scale * (1 - in));
 
     if (clip && layer) target->PopLayer();
     SafeRelease(layer);

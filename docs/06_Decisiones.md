@@ -293,6 +293,7 @@ monitor tarda varios segundos en mostrar la imagen.
   reposo como el reloj de `LastWakeTime`. Resolver `QueryInterruptTime` con
   `GetProcAddress` hizo que Smart App Control bloqueara la DLL.
 - Si nadie aparece frente a la cámara durante 10 s desde el bloqueo o desde
-  la última cara, el servicio informa la fase `away` y la isla queda gris,
-  quieta y dice "En espera". La detección sigue corriendo: apenas aparece una
+  la última cara, el servicio informa la fase `away`: la isla queda gris y
+  quieta, y la etiqueta "VisionAuth" crece animada hasta ocupar sola la
+  línea, en gris. La detección sigue corriendo: apenas aparece una
   cara pasa a "Verificando…". Recién bloqueada, busca al instante.

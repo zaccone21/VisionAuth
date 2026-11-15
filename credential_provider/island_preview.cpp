@@ -90,7 +90,7 @@ struct Step {
 static int RenderSheet(IWICImagingFactory* wic, ID2D1Factory* factory, const wchar_t* output, float scale) {
     const Step script[] = {{0.0, ISLAND_STARTING}, {0.9, ISLAND_SEARCHING}, {1.6, ISLAND_AWAY}, {2.4, ISLAND_FACE},
                            {3.4, ISLAND_UNRECOGNIZED}, {4.8, ISLAND_FACE}, {5.8, ISLAND_MATCH}};
-    const double moments[] = {0.10, 0.25, 0.7, 1.4, 2.2, 2.9, 3.46, 4.3, 5.92, 6.05, 7.2};
+    const double moments[] = {0.10, 0.25, 0.7, 1.4, 1.75, 2.2, 2.9, 3.46, 4.3, 5.92, 6.05, 7.2};
     const int frames = sizeof(moments) / sizeof(moments[0]);
     float rowW = 960 * scale, rowH = 190 * scale, labelW = 70 * scale;
     UINT sheetW = static_cast<UINT>(rowW + labelW), sheetH = static_cast<UINT>(rowH * frames);
