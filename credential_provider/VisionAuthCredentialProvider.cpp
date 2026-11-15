@@ -148,7 +148,8 @@ static Phase ParseReply(const char* reply) {
     if (strncmp(phase, "starting", 8) == 0) return PH_STARTING;
     if (strncmp(phase, "face", 4) == 0 || strncmp(phase, "verified", 8) == 0) return PH_FACE;
     if (strncmp(phase, "unrecognized", 12) == 0) return PH_UNRECOGNIZED;
-    if (strncmp(phase, "away", 4) == 0) return PH_AWAY;
+    // "idle" while locked means no face is enrolled: wait, greyed out
+    if (strncmp(phase, "away", 4) == 0 || strncmp(phase, "idle", 4) == 0) return PH_AWAY;
     return PH_SEARCHING;
 }
 
