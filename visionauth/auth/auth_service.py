@@ -67,8 +67,21 @@ class AuthService:
         Returns:
             AuthResult instance containing status, reason, confidence, and username.
         """
-        result = self._authenticate(username, visualize)
-        self._publish(username, result)
+        return self.authenticate_any([username], visualize)
+
+    def authenticate_any(self, usernames: list[str], visualize: bool = False) -> AuthResult:
+        """Authenticates the live face against several enrolled faces.
+
+        Faces without a usable profile (removed, renamed or made with another
+        model) are skipped. On success the result's user is the closest face.
+        Events are published as in authenticate(); a failure names every face.
+
+        Args:
+            usernames: The enrolled faces to compare against.
+            visualize: If True, draws rectangles and displays window preview.
+        """
+        result = self._authenticate(usernames, visualize)
+        self._publish(", ".join(usernames), result)
         return result
 
     def _publish(self, username: str, result: AuthResult) -> None:
@@ -83,29 +96,47 @@ class AuthService:
         else:
             self.event_bus.emit(EventType.AUTH_FAILED, {"user": username, "reason": result.reason})
 
-    def _authenticate(self, username: str, visualize: bool) -> AuthResult:
+    def _load_references(self, usernames: list[str]) -> tuple[np.ndarray, list[str]] | AuthResult:
+        """Stacks the enrolled samples of every usable face, with the face each row belongs to.
+
+        Returns:
+            (references, owners), or a failed AuthResult if no face is usable.
+        """
+        rows: list[list[float]] = []
+        owners: list[str] = []
+        reason = "user_not_found"
+        for username in usernames:
+            profile = self.persistence.load_user_profile(username)
+            if profile is None:
+                logger.error("Face '%s' has no profile: skipped.", username)
+                continue
+            if not is_profile_compatible(profile):
+                logger.error("Face '%s' was enrolled with an incompatible embedding model. Please enroll again.", username)
+                reason = "incompatible_profile"
+                continue
+            # Match against every enrolled sample rather than their average, so a face
+            # seen from the side is compared with the samples taken from that side
+            samples = profile.get("embeddings") or []
+            if not samples and profile.get("centroid") is not None:
+                samples = [profile["centroid"]]
+            if not samples:
+                logger.error("Face '%s' has no embeddings in its profile.", username)
+                reason = "invalid_profile_data"
+                continue
+            rows.extend(samples)
+            owners.extend([username] * len(samples))
+        if not rows:
+            return AuthResult(success=False, reason=reason, confidence=0.0, user=None)
+        logger.info("Loaded %d reference embedding(s) for %s", len(rows), ", ".join(dict.fromkeys(owners)))
+        return np.array(rows, dtype=np.float32), owners
+
+    def _authenticate(self, usernames: list[str], visualize: bool) -> AuthResult:
         """Runs the authentication pipeline without publishing events."""
-        # 1. Load user profile and biometric centroid
-        profile = self.persistence.load_user_profile(username)
-        if profile is None:
-            logger.error("Authentication failed: user '%s' profile not found.", username)
-            return AuthResult(success=False, reason="user_not_found", confidence=0.0, user=None)
-
-        if not is_profile_compatible(profile):
-            logger.error("User profile created with an incompatible embedding model. Please enroll again.")
-            return AuthResult(success=False, reason="incompatible_profile", confidence=0.0, user=None)
-
-        # Match against every enrolled sample rather than their average, so a face
-        # seen from the side is compared with the samples taken from that side
-        embeddings = profile.get("embeddings") or []
-        if embeddings:
-            references = np.array(embeddings, dtype=np.float32)
-        elif profile.get("centroid") is not None:
-            references = np.array([profile["centroid"]], dtype=np.float32)
-        else:
-            logger.error("Authentication failed: no embeddings found in profile for '%s'.", username)
-            return AuthResult(success=False, reason="invalid_profile_data", confidence=0.0, user=None)
-        logger.info("Loaded %d reference embedding(s) for '%s'", len(references), username)
+        # 1. Load the enrolled samples of every face
+        loaded = self._load_references(usernames)
+        if isinstance(loaded, AuthResult):
+            return loaded
+        references, owners = loaded
 
         # 2. Start camera
         camera_started_by_us = False
@@ -170,7 +201,10 @@ class AuthService:
 
                         # Evaluate biometric match only if live
                         if liveness_res.is_live:
-                            sim = float(np.max(references @ emb))
+                            similarities = references @ emb
+                            best = int(np.argmax(similarities))
+                            sim = float(similarities[best])
+                            username = owners[best]
                             logger.info("Similarity score: %.4f (threshold: %.2f)", sim, self.auth_threshold)
                             if sim >= self.auth_threshold:
                                 logger.info("MATCH decision: User '%s' authenticated successfully. Similarity: %.4f", username, sim)
