@@ -297,3 +297,26 @@ monitor tarda varios segundos en mostrar la imagen.
   quieta, y la etiqueta "VisionAuth" crece animada hasta ocupar sola la
   línea, en gris. La detección sigue corriendo: apenas aparece una
   cara pasa a "Verificando…". Recién bloqueada, busca al instante.
+
+## D18. Varias caras por cuenta, menú de administración y repo público
+
+**Decisión.**
+- Todas las caras registradas desbloquean la cuenta configurada (`account`
+  en `config.json`). El servicio compara cada intento contra las muestras de
+  todas y gana la más parecida; el saludo usa el nombre de esa cara. Se quitó
+  `display_name`: el nombre de la cara es el del saludo, así que admite tildes
+  y espacios.
+- Varias cuentas de Windows quedan a futuro: la contraseña es un único
+  secreto LSA.
+- La administración se hace con un menú en PowerShell (`visionauth.ps1`) que
+  llama a una CLI de Python (`python -m visionauth.cli`). La lógica queda en
+  Python y se testea con pytest; PowerShell maneja elevación, servicio y
+  registro.
+- Sensibilidad en tres niveles: `estricta` 0.55, `normal` 0.45,
+  `permisiva` 0.38.
+- El entorno de Python es el del usuario (`pip install --user`), el mismo que
+  usa el servicio a través de `site` en la configuración; no un `.venv`.
+- Licencia MIT. Documentación para usuarios en `docs/`, y la de diseño en
+  `docs/desarrollo/`.
+
+Diseño completo: `docs/superpowers/specs/2026-11-14-publico-y-menu-design.md`.

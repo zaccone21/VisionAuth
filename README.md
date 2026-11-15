@@ -2,110 +2,85 @@
 
 # VisionAuth
 
-Un "Face ID" para Windows: desbloquear la PC con la cara al sentarse,
-sin escribir la contraseña. Prioriza la comodidad sobre la seguridad de
-nivel empresarial y funciona con una webcam común (RGB).
+Un "Face ID" para Windows: te sentás frente a la PC bloqueada, la webcam te
+reconoce y entra sola, sin escribir la contraseña ni el PIN. Funciona con una
+webcam común (RGB), sin cámara infrarroja.
 
-El núcleo (cámara, detección, reconocimiento, liveness) está en Python y no
-depende del sistema operativo. El desbloqueo de la pantalla de inicio de
-sesión lo hace un Credential Provider nativo mínimo (C++) que le pide la
-verificación a un servicio de Windows que corre el núcleo.
+<p align="center"><img src="assets/isla.png" width="420" alt="La isla de VisionAuth en la pantalla de inicio de sesión"></p>
 
-## Estado
+Mientras la PC está bloqueada, una "isla" arriba de la pantalla de inicio de
+sesión muestra qué está pasando: buscando tu cara, verificando, si no te
+reconoce y, al reconocerte, te saluda por tu nombre y entra.
 
-El núcleo funciona: enrollment con poses reales de la cabeza e interfaz tipo
-Face ID, y reconocimiento con SFace. El desbloqueo en Windows (servicio y
-Credential Provider) está implementado y falta probarlo en la pantalla de
-bloqueo real. Ver [docs/03_Roadmap.md](docs/03_Roadmap.md) para el detalle y
-[docs/06_Decisiones.md](docs/06_Decisiones.md) para las decisiones tomadas.
+> **Comodidad antes que seguridad.** Con una webcam común, una foto o un video
+> tuyo bien hechos podrían llegar a desbloquear la PC. VisionAuth no reemplaza
+> a Windows Hello con cámara infrarroja. Leé [qué protege y qué no](docs/seguridad.md)
+> antes de instalarlo.
 
-## Stack
+## Qué hace
 
-Python 3.12, OpenCV 5 (DNN, SFace, YuNet), MediaPipe (BlazeFace), Pillow,
-PyTest. Credential Provider: C++ compilado con MinGW-w64 (WinLibs).
+- Desbloquea tu cuenta de Windows cuando reconoce una cara registrada: al
+  bloquear con Win+L y al volver del reposo.
+- Varias caras pueden desbloquear la misma cuenta; cada una es saludada por
+  su nombre.
+- Espera a que la pantalla se vea antes de entrar (al despertar la PC).
+- Si no hay nadie frente a la cámara, queda en espera, en gris.
+- El PIN y la contraseña siguen funcionando siempre, como alternativa.
+- Un menú en PowerShell para administrar caras, la contraseña guardada y los
+  ajustes.
 
-## Instalación
+## Requisitos
 
-### Windows
+- Windows 11 o Windows 10, con permisos de administrador.
+- Una webcam.
+- Una cuenta de Windows con contraseña. Para una cuenta de Microsoft, la
+  contraseña de Microsoft (el PIN no alcanza).
+- Python 3.12 o más nuevo, Git y el compilador WinLibs (MinGW-w64). La
+  [guía de instalación](docs/instalacion.md) explica cómo instalarlos.
 
-```
+## Instalación rápida
+
+Si ya tenés Python, Git y WinLibs:
+
+```powershell
 git clone https://github.com/zaccone21/VisionAuth.git
 cd VisionAuth
-py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e .[dev]
-.venv\Scripts\python scripts\download_models.py
-.venv\Scripts\python -m pytest
+python -m pip install --user -e ".[dev]"
+python scripts\download_models.py
+& "C:\Program Files\Git\bin\sh.exe" credential_provider/build.sh
+# En PowerShell como administrador:
+.\scripts\install.ps1 -SkipLockScreen
 ```
 
-### Linux
+El instalador registra tu cara si todavía no hay ninguna y te pide la
+contraseña de la cuenta. Después, bloqueá con Win+L y mirá a la cámara.
 
-```
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/python scripts/download_models.py
-.venv/bin/python -m pytest
-```
+El paso a paso completo, con cada requisito, está en
+[docs/instalacion.md](docs/instalacion.md).
 
-`download_models.py` descarga los modelos de reconocimiento (SFace y YuNet,
-OpenCV Model Zoo) y verifica sus checksums. Sin ellos los tests de enrollment
-y el reconocimiento fallan.
+## Administrarlo
 
-## Uso
-
-Los perfiles se guardan en `data/` en la raíz del proyecto, sin importar
-desde dónde se ejecute:
-
-```
-.venv/bin/python examples/enrollment_demo.py          # registrar tu cara
-.venv/bin/python examples/camera_recognition_demo.py  # ver si te reconoce
+```powershell
+.\visionauth.ps1
 ```
 
-En Windows reemplazá `.venv/bin/python` por `.venv\Scripts\python`.
-
-El enrollment muestra la cámara dentro de un círculo y un anillo que se
-completa a medida que girás la cabeza. Si el usuario ya existe, ofrece
-agregar muestras a su perfil: conviene enrolarse en el lugar y con la cámara
-en la posición donde se va a desbloquear.
-
-Los datos biométricos (`**/data/users/`) nunca se suben a git.
-
-## Desbloqueo de Windows
-
-Requiere estar enrolado y el compilador WinLibs
-(`winget install BrechtSanders.WinLibs.POSIX.UCRT`).
-
-```
-sh credential_provider/build.sh --test              # compila la DLL y corre sus tests
-.\scripts\install.ps1 -ProfileName <tu perfil>      # PowerShell como administrador
-```
-
-El instalador registra el servicio `VisionAuth` (SYSTEM, inicio automático),
-el Credential Provider en `C:\Program Files\VisionAuth` y pide la contraseña
-de tu cuenta (para una cuenta de Microsoft, la de Microsoft; el PIN no
-alcanza). La contraseña queda en un secreto LSA que solo leen SYSTEM y los
-administradores. Log del servicio: `C:\ProgramData\VisionAuth\service.log`.
-
-Para quitarlo: `.\scripts\uninstall.ps1` (como administrador).
-
-**Si la pantalla de inicio deja de funcionar:** el PIN sigue disponible en
-"Opciones de inicio de sesión". Si aun así no se puede entrar, mantené Shift
-y elegí Reiniciar en la pantalla de inicio, después Solucionar problemas >
-Opciones avanzadas > Símbolo del sistema, y borrá la DLL (en ese modo la
-letra de unidad puede ser otra):
-
-```
-del "C:\Program Files\VisionAuth\VisionAuthCredentialProvider.dll"
-```
-
-Sin la DLL, Windows ignora el Credential Provider registrado.
+Abre el menú para agregar, renombrar o eliminar caras, cambiar la contraseña
+guardada, la cámara, la sensibilidad y los demás ajustes, pausar VisionAuth
+o ver el log. Ver [docs/uso.md](docs/uso.md).
 
 ## Documentación
 
 | Documento | Contenido |
 |---|---|
-| [01_PRD](docs/01_PRD.md) | Requisitos del producto |
-| [02_SDD](docs/02_SDD.md) | Diseño original (parcialmente desactualizado, ver Decisiones) |
-| [03_Roadmap](docs/03_Roadmap.md) | Fases, estado y lo que falta |
-| [04_CodingStandards](docs/04_CodingStandards.md) | Estándares de código |
-| [05_ARCHITECTURE_LOCK](docs/05_ARCHITECTURE_LOCK.md) | Arquitectura base |
-| [06_Decisiones](docs/06_Decisiones.md) | Decisiones tomadas y por qué |
+| [Instalación](docs/instalacion.md) | Paso a paso desde cero |
+| [Uso](docs/uso.md) | El menú y los comandos |
+| [Configuración](docs/configuracion.md) | Ajustes, archivos y registro |
+| [Seguridad](docs/seguridad.md) | Qué protege y qué no |
+| [Recuperación](docs/recuperacion.md) | Si la pantalla de inicio falla, y cómo desinstalar |
+| [Desarrollo](docs/desarrollo/README.md) | Cómo está hecho, tests y decisiones de diseño |
+
+## Licencia
+
+MIT, ver [LICENSE](LICENSE). Se entrega sin garantía: si algo falla, el PIN
+sigue disponible y [la guía de recuperación](docs/recuperacion.md) explica
+cómo sacarlo.
