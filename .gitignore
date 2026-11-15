@@ -65,3 +65,4 @@ desktop.ini
 *.tmp
 lock_screen_camera_probe.log
 credential_provider/build/
+.superpowers/

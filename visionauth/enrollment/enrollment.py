@@ -5,7 +5,6 @@ verifying presence of exactly one face, and persisting metadata and samples.
 """
 
 import logging
-import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +12,7 @@ import numpy as np
 
 from visionauth.camera.camera import Camera, CameraError
 from visionauth.config.config import EnrollmentConfig
+from visionauth.faces import InvalidFaceName, validate_face_name
 from visionauth.events.event_bus import EventBus
 from visionauth.enrollment.embedder import DummyFaceEmbedder, FaceEmbedder, RealFaceEmbedder
 from visionauth.enrollment.stability import FaceStabilityTracker
@@ -93,21 +93,12 @@ class EnrollmentService:
         """Validates the username format.
 
         Raises:
-            InvalidUserError: If username is empty or contains unsafe/special characters.
+            InvalidUserError: If the name cannot be used for a face (see validate_face_name).
         """
-        if not username:
-            raise InvalidUserError("Username cannot be empty.")
-
-        stripped = username.strip()
-        if not stripped:
-            raise InvalidUserError("Username cannot be composed only of whitespace.")
-
-        # Accept alphanumeric, underscores, and hyphens. Prevents path traversal.
-        if not re.match(r"^[a-zA-Z0-9_-]+$", stripped):
-            raise InvalidUserError(
-                "Username contains invalid characters. Only alphanumeric, "
-                "underscores, and hyphens are allowed."
-            )
+        try:
+            validate_face_name(username)
+        except InvalidFaceName as e:
+            raise InvalidUserError(str(e)) from e
 
     def enroll(
         self,
